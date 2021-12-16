@@ -1,0 +1,15 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -197,12 +197,6 @@ if (NOT (${CMAKE_SYSTEM_NAME} MATCHES "Darwin"))
+         DESTINATION ${PSMOVEAPI_LIB_DEST}/pkgconfig)
+ endif()
+ 
+-if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+-    # Only install the udev configuration file on Linux
+-    install(FILES ${ROOT_DIR}/contrib/99-psmove.rules
+-        DESTINATION /etc/udev/rules.d)
+-endif()
+-
+ install(TARGETS ${PSMOVEAPI_INSTALL_TARGETS}
+     RUNTIME DESTINATION bin
+     LIBRARY DESTINATION ${PSMOVEAPI_LIB_DEST}
