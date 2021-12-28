@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::psmove::Controller;
+use crate::psmove::{Controller, Feedback};
 
 pub mod psmove;
 
@@ -21,8 +21,14 @@ async fn main() -> Result<()> {
     loop {
         controller.update().await?;
 
-        // std::thread::sleep(Duration::from_millis(10));
-    }
+        fn color(v: f32) -> u8 {
+            return (v.abs().clamp(0.0, 1.0) * 255.0) as u8;
+        }
 
-    return Ok(());
+        controller.feedback(Feedback::new()
+            .with_color(color(controller.input().accelerometer.x),
+                        color(controller.input().accelerometer.y),
+                        color(controller.input().accelerometer.z))
+            .with_rumble((controller.input().buttons.trigger.1 * 255.0) as u8));
+    }
 }

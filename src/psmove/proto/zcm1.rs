@@ -4,8 +4,9 @@ use packed_struct::prelude::{Integer, packed_bits, PackedStruct};
 use crate::psmove::proto::{Feature, Get, Primary, Set};
 
 use super::Report;
+use crate::psmove::Feedback;
 
-pub const REPORT_GET_INPUT: u8 = 0x01;
+const REPORT_GET_INPUT: u8 = 0x01;
 const REPORT_SET_LED: u8 = 0x06;
 const REPORT_SET_LED_PWM_FREQ: u8 = 0x03;
 const REPORT_GET_BT_ADDR: u8 = 0x04;
@@ -119,14 +120,14 @@ impl Set for SetLED {
 }
 
 impl SetLED {
-    pub fn with_color(r: u8, g: u8, b: u8) -> Self {
+    pub fn from(feedback: &Feedback) -> Self {
         return Self {
             _reserved1: [0],
-            r,
-            g,
-            b,
+            r: feedback.r,
+            g: feedback.g,
+            b: feedback.b,
             _reserved2: [0],
-            rumble: 0,
+            rumble: feedback.rumble,
             _reserved3: [0, 0],
         };
     }

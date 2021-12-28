@@ -1,4 +1,6 @@
+use std::ops::Deref;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cgmath::{ElementWise, Zero};
@@ -23,6 +25,98 @@ pub struct Buttons {
     pub swoosh: bool,
 
     pub trigger: (bool, f32),
+}
+
+struct Limiter<T> {
+    value: T,
+    dirty: bool,
+    updated: Instant,
+}
+
+impl<T> Limiter<T> {
+    const MIN_UPDATE: Duration = Duration::from_millis(110);
+    const MAX_UPDATE: Duration = Duration::from_millis(4000);
+
+    pub fn new(initial: T) -> Self {
+        return Self {
+            value: initial,
+            dirty: true,
+            updated: Instant::now(),
+        };
+    }
+
+    pub fn set(&mut self, value: T) {
+        self.value = value;
+        self.dirty = true;
+    }
+
+    pub(self) fn update(&mut self) -> Option<&T> {
+        let now = Instant::now();
+
+        // Check if value has change but rate limit will not exceed or if value needs resending
+        if (now.duration_since(self.updated) >= Self::MIN_UPDATE && self.dirty) ||
+            now.duration_since(self.updated) >= Self::MAX_UPDATE {
+            self.updated = now;
+            return Some(&self.value);
+        }
+
+        return None;
+    }
+}
+
+impl<T> Deref for Limiter<T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        return &self.value;
+    }
+}
+
+impl<T> Default for Limiter<T>
+    where
+        T: Default
+{
+    fn default() -> Self {
+        return Self::new(T::default());
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Feedback {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+
+    pub rumble: u8,
+}
+
+impl Feedback {
+    pub fn new() -> Self {
+        return Self {
+            r: 0,
+            g: 0,
+            b: 0,
+            rumble: 0,
+        };
+    }
+
+    pub fn with_color(mut self, r: u8, g: u8, b: u8) -> Self {
+        self.r = r;
+        self.g = g;
+        self.b = b;
+        return self;
+    }
+
+    pub fn with_rumble(mut self, rumble: u8) -> Self {
+        self.rumble = rumble;
+        return self;
+    }
+}
+
+impl Default for Feedback {
+    fn default() -> Self {
+        return Self::new();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -87,9 +181,12 @@ impl From<GetCalibrationInner> for Calibration {
 pub struct Controller {
     f: File,
 
-    pub input: Input,
-
+    /// Calibration data received from the controller
     calibration: Calibration,
+
+    input: Input,
+
+    feedback: Limiter<Feedback>,
 }
 
 mod proto;
@@ -111,12 +208,19 @@ impl Controller {
 
         return Ok(Self {
             f,
-            input: Default::default(),
             calibration,
+            input: Default::default(),
+            feedback: Default::default(),
         });
     }
 
     pub async fn update(&mut self) -> Result<()> {
+        // Send updates if required
+        if let Some(feedback) = self.feedback.update() {
+            let led = SetLED::from(feedback);
+            SetLED::set(&mut self.f, led).await?;
+        }
+
         // Read input report from device
         let input = GetInput::get(&mut self.f).await?;
 
@@ -149,15 +253,14 @@ impl Controller {
             trigger: (bit(input.buttons, 20), trigger),
         };
 
-        // fn color(v: f32) -> u8 {
-        //     return (v.abs().clamp(0.0, 1.0) * 255.0) as u8;
-        // }
-        //
-        // let led = self::proto::zcm1::SetLED::with_color(color(self.input.accelerometer.x),
-        //                             color(self.input.accelerometer.y),
-        //                             color(self.input.accelerometer.z));
-        // SetLED::set(&mut self.f, led).await?;
-
         return Ok(());
+    }
+
+    pub fn input(&self) -> &Input {
+        return &self.input;
+    }
+
+    pub fn feedback(&mut self, feedback: Feedback) {
+        self.feedback.set(feedback);
     }
 }
