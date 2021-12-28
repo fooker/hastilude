@@ -1,8 +1,8 @@
-pub mod psmove;
-
 use anyhow::Result;
+
 use crate::psmove::Controller;
-use std::time::Duration;
+
+pub mod psmove;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,10 +16,10 @@ async fn main() -> Result<()> {
     //     println!("Device: {:?}", dev);
     // }
 
-    let mut controller = Controller::new("/dev/hidraw0")?;
+    let mut controller = Controller::new("/dev/hidraw0").await?;
 
     loop {
-        controller.update()?;
+        controller.update().await?;
 
         // std::thread::sleep(Duration::from_millis(10));
     }

@@ -1,6 +1,8 @@
 use anyhow::Result;
 use packed_struct::prelude::{Integer, packed_bits, PackedStruct};
 
+use crate::psmove::proto::{Feature, Get, Primary, Set};
+
 use super::Report;
 
 pub const REPORT_GET_INPUT: u8 = 0x01;
@@ -90,6 +92,8 @@ impl Report for GetInput {
     const REPORT_ID: u8 = self::REPORT_GET_INPUT;
 }
 
+impl Get for GetInput { type Getter = Primary; }
+
 #[derive(PackedStruct, Debug)]
 #[packed_struct(bit_numbering = "msb0", endian = "lsb")]
 pub struct SetLED {
@@ -110,8 +114,12 @@ impl Report for SetLED {
     const REPORT_ID: u8 = self::REPORT_SET_LED;
 }
 
+impl Set for SetLED {
+    type Setter = Primary;
+}
+
 impl SetLED {
-    pub fn withColor(r: u8, g: u8, b: u8) -> Self {
+    pub fn with_color(r: u8, g: u8, b: u8) -> Self {
         return Self {
             _reserved1: [0],
             r,
@@ -133,6 +141,10 @@ pub struct GetCalibration {
 
 impl Report for GetCalibration {
     const REPORT_ID: u8 = self::REPORT_GET_CALIBRATION;
+}
+
+impl Get for GetCalibration {
+    type Getter = Feature;
 }
 
 impl GetCalibration {

@@ -1,15 +1,11 @@
-use std::fs::{File, OpenOptions};
-use std::io::{self, Read};
-use std::os::unix::prelude::{AsRawFd, OpenOptionsExt};
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use cgmath::{ElementWise, Zero};
-use packed_struct::PackedStructSlice;
-use packed_struct::prelude::bits::ByteArray;
+use tokio::fs::{File, OpenOptions};
 
-use crate::psmove::proto::Report;
-use crate::psmove::proto::zcm1::{GetCalibration, GetCalibrationInner};
+use crate::psmove::proto::{Get, Set};
+use crate::psmove::proto::zcm1::{GetCalibration, GetCalibrationInner, GetInput, SetLED};
 
 pub mod hid;
 
@@ -99,22 +95,18 @@ pub struct Controller {
 mod proto;
 
 impl Controller {
-    const IOC_HIDRAW_MAGIC: char = 'H';
-    const IOC_HIDRAW_SEND_FEATURE_REPORT: u8 = 0x06;
-    const IOC_HIDRAW_GET_FEATURE_REPORT: u8 = 0x07;
-
-    pub fn new(path: impl AsRef<Path>) -> Result<Self> {
-        let f = OpenOptions::new()
+    pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
+        let mut f = OpenOptions::new()
             .read(true)
             .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(path)?;
+            .open(path)
+            .await?;
 
         // Collect calibration data from device
         let calibration = GetCalibration::stitch([
-            &Self::get_feature_report(&f)?,
-            &Self::get_feature_report(&f)?,
-            &Self::get_feature_report(&f)?,
+            &GetCalibration::get(&mut f).await?,
+            &GetCalibration::get(&mut f).await?,
+            &GetCalibration::get(&mut f).await?,
         ])?.into();
 
         return Ok(Self {
@@ -124,108 +116,47 @@ impl Controller {
         });
     }
 
-    fn send_feature_report<R: Report>(f: &impl AsRawFd, report: &R) -> Result<()> {
-        let ioc = nix::ioc!(nix::sys::ioctl::READ | nix::sys::ioctl::WRITE,
-            Self::IOC_HIDRAW_MAGIC,
-            Self::IOC_HIDRAW_SEND_FEATURE_REPORT,
-            R::ByteArray::len() + 1);
+    pub async fn update(&mut self) -> Result<()> {
+        // Read input report from device
+        let input = GetInput::get(&mut self.f).await?;
 
-        let mut data = vec![0u8; R::ByteArray::len() + 1]; // Make this static allocate
-        data[0] = R::REPORT_ID;
-        report.pack_to_slice(&mut data[1..])?;
-
-        nix::errno::Errno::result(unsafe {
-            nix::libc::ioctl(f.as_raw_fd(), ioc, data.as_slice())
-        })?;
-
-        return Ok(());
-    }
-
-    fn get_feature_report<R: Report>(f: &impl AsRawFd) -> Result<R> {
-        let ioc = nix::ioc!(nix::sys::ioctl::READ | nix::sys::ioctl::WRITE,
-            Self::IOC_HIDRAW_MAGIC,
-            Self::IOC_HIDRAW_GET_FEATURE_REPORT,
-            R::ByteArray::len() + 1);
-
-        let mut data = vec![0u8; R::ByteArray::len() + 1]; // Make this static allocate
-        data[0] = R::REPORT_ID;
-
-        nix::errno::Errno::result(unsafe {
-            nix::libc::ioctl(f.as_raw_fd(), ioc, data.as_mut_slice())
-        })?;
-
-        return Ok(R::unpack_from_slice(&data[1..])?);
-    }
-
-    pub fn update(&mut self) -> Result<()> {
-        let mut buffer = [0u8; 4096];
-
-        // Read in reports from device
-        while let Some(buffer) = self.f.read(&mut buffer)
-            .map(|size| Some(&buffer[0..size]))
-            .or_else(|err| if err.kind() == io::ErrorKind::WouldBlock {
-                Ok(None)
-            } else {
-                Err(err)
-            })? {
-            let req = buffer[0];
-            let data = &buffer[1..];
-
-            match req {
-                proto::zcm1::REPORT_GET_INPUT => {
-                    let input = proto::zcm1::GetInput::parse(data)?;
-
-                    fn avg(v1: cgmath::Vector3<f32>, v2: cgmath::Vector3<f32>) -> cgmath::Vector3<f32> {
-                        return (v1 + v2) / 2.0;
-                    }
-
-                    self.input.accelerometer = avg(input.accel_1.into(), input.accel_2.into())
-                        .mul_element_wise(self.calibration.accelerometer_m)
-                        .add_element_wise(self.calibration.accelerometer_b);
-
-                    self.input.gyroscope = avg(input.gyro_1.into(), input.gyro_2.into())
-                        .mul_element_wise(self.calibration.gyroscope);
-
-                    fn bit(buttons: impl Into<u32>, bit: usize) -> bool {
-                        return buttons.into() & (1 << bit) != 0;
-                    }
-
-                    let trigger = ((input.trigger_1 as f32) / (0xFF as f32) + (input.trigger_1 as f32) / (0xFF as f32)) / 2.0;
-
-                    self.input.buttons = Buttons {
-                        square: bit(input.buttons, 15),
-                        triangle: bit(input.buttons, 12),
-                        cross: bit(input.buttons, 14),
-                        circle: bit(input.buttons, 13),
-                        start: bit(input.buttons, 3),
-                        select: bit(input.buttons, 0),
-                        logo: bit(input.buttons, 16),
-                        swoosh: bit(input.buttons, 19),
-                        trigger: (bit(input.buttons, 20), trigger),
-                    };
-                }
-
-                _ => {
-                    bail!("Unsupported request type received: {:02x}", req);
-                }
-            }
-
-            // fn color(v: f32) -> u8 {
-            //     return (v.abs().clamp(0.0, 1.0) * 255.0) as u8;
-            // }
-            //
-            // let led = SetLED::withColor(color(self.input.accelerometer.x),
-            //                             color(self.input.accelerometer.y),
-            //                             color(self.input.accelerometer.z));
-            //
-            // {
-            //     let mut data = vec![0u8; <SetLED as PackedStruct>::ByteArray::len() + 1]; // Make this static allocate
-            //     data[0] = SetLED::ID;
-            //     led.pack_to_slice(&mut data[1..])?;
-            //
-            //     self.f.write_all(&data)?;
-            // }
+        fn avg(v1: cgmath::Vector3<f32>, v2: cgmath::Vector3<f32>) -> cgmath::Vector3<f32> {
+            return (v1 + v2) / 2.0;
         }
+
+        self.input.accelerometer = avg(input.accel_1.into(), input.accel_2.into())
+            .mul_element_wise(self.calibration.accelerometer_m)
+            .add_element_wise(self.calibration.accelerometer_b);
+
+        self.input.gyroscope = avg(input.gyro_1.into(), input.gyro_2.into())
+            .mul_element_wise(self.calibration.gyroscope);
+
+        fn bit(buttons: impl Into<u32>, bit: usize) -> bool {
+            return buttons.into() & (1 << bit) != 0;
+        }
+
+        let trigger = ((input.trigger_1 as f32) / (0xFF as f32) + (input.trigger_1 as f32) / (0xFF as f32)) / 2.0;
+
+        self.input.buttons = Buttons {
+            square: bit(input.buttons, 15),
+            triangle: bit(input.buttons, 12),
+            cross: bit(input.buttons, 14),
+            circle: bit(input.buttons, 13),
+            start: bit(input.buttons, 3),
+            select: bit(input.buttons, 0),
+            logo: bit(input.buttons, 16),
+            swoosh: bit(input.buttons, 19),
+            trigger: (bit(input.buttons, 20), trigger),
+        };
+
+        // fn color(v: f32) -> u8 {
+        //     return (v.abs().clamp(0.0, 1.0) * 255.0) as u8;
+        // }
+        //
+        // let led = self::proto::zcm1::SetLED::with_color(color(self.input.accelerometer.x),
+        //                             color(self.input.accelerometer.y),
+        //                             color(self.input.accelerometer.z));
+        // SetLED::set(&mut self.f, led).await?;
 
         return Ok(());
     }
