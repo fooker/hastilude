@@ -7,7 +7,7 @@ use cgmath::{ElementWise, Zero};
 use tokio::fs::{File, OpenOptions};
 
 use crate::psmove::proto::{Get, Set};
-use crate::psmove::proto::zcm1::{GetCalibration, GetCalibrationInner, GetInput, SetLED};
+use crate::psmove::proto::zcm1::{GetAddress, GetCalibration, GetCalibrationInner, GetInput, SetLED};
 
 pub mod hid;
 
@@ -33,7 +33,10 @@ struct Limiter<T> {
     updated: Instant,
 }
 
-impl<T> Limiter<T> {
+impl<T> Limiter<T>
+    where
+        T: PartialEq,
+{
     const MIN_UPDATE: Duration = Duration::from_millis(110);
     const MAX_UPDATE: Duration = Duration::from_millis(4000);
 
@@ -46,8 +49,10 @@ impl<T> Limiter<T> {
     }
 
     pub fn set(&mut self, value: T) {
-        self.value = value;
-        self.dirty = true;
+        if value != self.value {
+            self.value = value;
+            self.dirty = true;
+        }
     }
 
     pub(self) fn update(&mut self) -> Option<&T> {
@@ -74,14 +79,14 @@ impl<T> Deref for Limiter<T> {
 
 impl<T> Default for Limiter<T>
     where
-        T: Default
+        T: PartialEq + Default
 {
     fn default() -> Self {
         return Self::new(T::default());
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Feedback {
     pub r: u8,
     pub g: u8,
@@ -100,14 +105,21 @@ impl Feedback {
         };
     }
 
-    pub fn with_color(mut self, r: u8, g: u8, b: u8) -> Self {
+    pub fn led_color(mut self, (r, g, b): (u8, u8, u8)) -> Self {
         self.r = r;
         self.g = g;
         self.b = b;
         return self;
     }
 
-    pub fn with_rumble(mut self, rumble: u8) -> Self {
+    pub fn led_off(mut self) -> Self {
+        self.r = 0;
+        self.g = 0;
+        self.b = 0;
+        return self;
+    }
+
+    pub fn rumble(mut self, rumble: u8) -> Self {
         self.rumble = rumble;
         return self;
     }
@@ -137,8 +149,18 @@ impl Default for Input {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Battery {
+    Draining(f32),
+
+    Charging,
+    Charged,
+
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
-pub struct Calibration {
+struct Calibration {
     accelerometer_m: cgmath::Vector3<f32>,
     accelerometer_b: cgmath::Vector3<f32>,
 
@@ -181,10 +203,14 @@ impl From<GetCalibrationInner> for Calibration {
 pub struct Controller {
     f: File,
 
+    /// The bluetooth address of the controller
+    address: String,
+
     /// Calibration data received from the controller
     calibration: Calibration,
 
     input: Input,
+    battery: Battery,
 
     feedback: Limiter<Feedback>,
 }
@@ -199,6 +225,10 @@ impl Controller {
             .open(path)
             .await?;
 
+        // Get device address
+        let address = GetAddress::get(&mut f).await?
+            .controller.as_string();
+
         // Collect calibration data from device
         let calibration = GetCalibration::stitch([
             &GetCalibration::get(&mut f).await?,
@@ -208,10 +238,16 @@ impl Controller {
 
         return Ok(Self {
             f,
+            address,
             calibration,
             input: Default::default(),
+            battery: Battery::Unknown,
             feedback: Default::default(),
         });
+    }
+
+    pub fn serial(&self) -> &str {
+        return &self.address;
     }
 
     pub async fn update(&mut self) -> Result<()> {
@@ -253,11 +289,26 @@ impl Controller {
             trigger: (bit(input.buttons, 20), trigger),
         };
 
+        self.battery = match input.battery {
+            0x00 => Battery::Draining(0.0),
+            0x01 => Battery::Draining(0.2),
+            0x02 => Battery::Draining(0.4),
+            0x03 => Battery::Draining(0.6),
+            0x04 => Battery::Draining(0.8),
+            0xEE => Battery::Charging,
+            0xEF => Battery::Charged,
+            _ => Battery::Unknown,
+        };
+
         return Ok(());
     }
 
     pub fn input(&self) -> &Input {
         return &self.input;
+    }
+
+    pub fn battery(&self) -> &Battery {
+        return &self.battery;
     }
 
     pub fn feedback(&mut self, feedback: Feedback) {

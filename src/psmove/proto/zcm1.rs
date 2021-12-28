@@ -1,10 +1,10 @@
 use anyhow::Result;
 use packed_struct::prelude::{Integer, packed_bits, PackedStruct};
 
+use crate::psmove::Feedback;
 use crate::psmove::proto::{Feature, Get, Primary, Set};
 
 use super::Report;
-use crate::psmove::Feedback;
 
 const REPORT_GET_INPUT: u8 = 0x01;
 const REPORT_SET_LED: u8 = 0x06;
@@ -211,4 +211,35 @@ pub struct GetCalibrationInner {
     _unknown17: [u8; 4],
 
     _unknown18: [u8; 17],
+}
+
+#[derive(PackedStruct, Debug)]
+#[packed_struct(bit_numbering = "msb0", endian = "lsb")]
+pub struct Address {
+    data: [u8; 6],
+}
+
+impl Address {
+    pub fn as_string(&self) -> String {
+        return format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                       self.data[5], self.data[4], self.data[3], self.data[2], self.data[1], self.data[0]);
+    }
+}
+
+#[derive(PackedStruct, Debug)]
+#[packed_struct(bit_numbering = "msb0", endian = "lsb")]
+pub struct GetAddress {
+    #[packed_field(element_size_bytes = "6")]
+    pub controller: Address,
+
+    #[packed_field(element_size_bytes = "6")]
+    pub host: Address,
+}
+
+impl Report for GetAddress {
+    const REPORT_ID: u8 = self::REPORT_GET_BT_ADDR;
+}
+
+impl Get for GetAddress {
+    type Getter = Feature;
 }

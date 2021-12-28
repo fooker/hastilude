@@ -1,8 +1,11 @@
 use anyhow::Result;
 
-use crate::psmove::{Controller, Feedback};
+use crate::psmove::Controller;
+use crate::games::{Lobby, Game};
 
 pub mod psmove;
+pub mod state;
+pub mod games;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -16,19 +19,24 @@ async fn main() -> Result<()> {
     //     println!("Device: {:?}", dev);
     // }
 
-    let mut controller = Controller::new("/dev/hidraw0").await?;
+    let controllers = vec![
+        Controller::new("/dev/hidraw0").await?,
+    ];
 
-    loop {
-        controller.update().await?;
+    let mut data = state::Data {
+        game: Game::Joust,
+        controllers,
+    };
 
-        fn color(v: f32) -> u8 {
-            return (v.abs().clamp(0.0, 1.0) * 255.0) as u8;
+    let mut state = state::StateMachine::new(Lobby::new(), &mut data);
+
+    while state.is_running() {
+        for controller in data.controllers.iter_mut() {
+            controller.update().await?;
         }
 
-        controller.feedback(Feedback::new()
-            .with_color(color(controller.input().accelerometer.x),
-                        color(controller.input().accelerometer.y),
-                        color(controller.input().accelerometer.z))
-            .with_rumble((controller.input().buttons.trigger.1 * 255.0) as u8));
+        state.update(&mut data);
     }
+
+    return Ok(());
 }
