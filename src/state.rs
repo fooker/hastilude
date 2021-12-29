@@ -1,8 +1,10 @@
 use crate::psmove::Controller;
 use crate::games::Game;
+use crate::sound::Sound;
 
 pub struct Data {
     pub game: Game,
+    pub sound: Sound,
     pub controllers: Vec<Controller>,
 }
 

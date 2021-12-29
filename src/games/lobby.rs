@@ -1,56 +1,8 @@
 use std::collections::HashSet;
-use std::time::Duration;
 
-use scarlet::color::RGBColor;
-use tokio::time::Instant;
-
+use crate::games::meta::Countdown;
 use crate::psmove::Feedback;
 use crate::state::{Data, State, Transition};
-
-struct Countdown {
-    start: Instant,
-}
-
-impl Countdown {
-    const COLOR_1: RGBColor = RGBColor { r: 1.0, g: 0.0, b: 0.0 };
-    const COLOR_2: RGBColor = RGBColor { r: 1.0, g: 1.0, b: 0.0 };
-    const COLOR_3: RGBColor = RGBColor { r: 0.0, g: 1.0, b: 0.0 };
-
-    pub fn new() -> Self {
-        return Self {
-            start: Instant::now(),
-        };
-    }
-}
-
-impl State for Countdown {
-    fn on_update(&mut self, data: &mut Data) -> Transition {
-        let elapsed = self.start.elapsed();
-
-        for controller in data.controllers.iter_mut() {
-            let mut feedback = Feedback::new();
-            if elapsed < Duration::from_millis(250) {
-                feedback = feedback.rumble(0xFF);
-            }
-
-            if elapsed < Duration::from_secs(1) {
-                feedback = feedback.led_color(Self::COLOR_1);
-            } else if elapsed < Duration::from_secs(2) {
-                feedback = feedback.led_color(Self::COLOR_2);
-            } else if elapsed < Duration::from_secs(3) {
-                feedback = feedback.led_color(Self::COLOR_3);
-            }
-
-            controller.feedback(feedback);
-        }
-
-        if elapsed >= Duration::from_secs(3) {
-            return Transition::Replace(data.game.create());
-        }
-
-        return Transition::None;
-    }
-}
 
 pub struct Lobby {
     ready: HashSet<String>,
@@ -101,7 +53,10 @@ impl State for Lobby {
 
         if data.controllers.iter().all(|controller| self.ready.contains(controller.serial())) ||
             data.controllers.iter().any(|controller| controller.input().buttons.start) {
-            return Transition::Push(Box::new(Countdown::new()));
+            return Transition::Sequence(vec![
+                Transition::Push(data.game.create(data)),
+                Transition::Push(Box::new(Countdown::new())),
+            ]);
         }
 
         return Transition::None;

@@ -1,73 +1,60 @@
 use std::collections::HashMap;
-use std::time::{Instant, Duration};
+use std::time::{Duration, Instant};
 
 use cgmath::InnerSpace;
 use heapless::HistoryBuffer;
+use rand::Rng;
 use scarlet::color::{Color, RGBColor};
 use scarlet::colors::HSVColor;
 
+use crate::games::meta::Winner;
 use crate::psmove::Feedback;
+use crate::sound::Music;
 use crate::state::{Data, State, Transition};
-
-struct Winner {
-    serial: Option<String>,
-    start: Instant,
-}
-
-impl Winner {
-    pub fn new(serial: Option<String>) -> Self {
-        return Self {
-            serial,
-            start: Instant::now(),
-        };
-    }
-}
-
-impl State for Winner {
-    fn on_update(&mut self, data: &mut Data) -> Transition {
-        let elapsed = self.start.elapsed();
-
-        for controller in data.controllers.iter_mut() {
-            let mut feedback = Feedback::new();
-
-            if self.serial.as_ref().map_or(true, |serial| controller.serial() == serial) {
-                feedback = feedback.led_color(HSVColor {
-                    h: (elapsed.as_secs_f64() * 90.0) % 360.0,
-                    s: 1.0,
-                    v: 1.0
-                }.convert::<RGBColor>());
-
-                if elapsed < Duration::from_millis(1500) {
-                    feedback = feedback.rumble(((elapsed.as_secs_f32() * std::f32::consts::PI * 2.0).sin().abs() * 255.0) as u8);
-                }
-            }
-
-            controller.feedback(feedback);
-        }
-
-        if elapsed >= Duration::from_secs(10) {
-            return Transition::Pop;
-        }
-
-        return Transition::None;
-    }
-}
 
 struct Player {
     hue: f64,
     accel_buffer: HistoryBuffer<f32, 4>,
 }
 
+#[derive(Debug,Copy, Clone)]
+enum Speed {
+    NORMAL,
+    FAST,
+    SLOW,
+}
+
+impl Speed {
+    pub fn music(self) -> i8 {
+        return match self {
+            Speed::NORMAL => 0,
+            Speed::FAST => i8::MAX,
+            Speed::SLOW => i8::MIN,
+        };
+    }
+}
+
 pub struct Joust {
+    music: Music,
     alive: HashMap<String, Player>,
+    speed: (Speed, Instant),
 }
 
 impl Joust {
     const MAX_SPEED: f32 = 3.2;
 
-    pub fn new() -> Self {
+    const MUSIC_TIME_MIN: Duration = Duration::from_secs(10);
+    const MUSIC_TIME_MAX: Duration = Duration::from_secs(23);
+
+    pub fn new(data: &Data) -> Self {
+        // TODO: Error handling
+        let music = data.sound.music("assets/music/loop.ogg")
+            .expect("Can not load music");
+
         return Self {
+            music,
             alive: HashMap::new(),
+            speed: (Speed::NORMAL, Instant::now()),
         };
     }
 }
@@ -87,7 +74,31 @@ impl State for Joust {
             .collect();
     }
 
+    fn on_resume(&mut self, _: &mut Data) {
+        let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
+        self.speed = (Speed::NORMAL, Instant::now() + duration);
+    }
+
     fn on_update(&mut self, data: &mut Data) -> Transition {
+        let now = Instant::now();
+        if self.speed.1 < now {
+            let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
+
+            let speed = match self.speed.0 {
+                Speed::NORMAL => if rand::thread_rng().gen() {
+                    Speed::FAST
+                } else {
+                    Speed::SLOW
+                }
+                Speed::FAST |
+                Speed::SLOW => Speed::NORMAL,
+            };
+
+            self.music.speed(speed.music());
+
+            self.speed = (speed, now + duration);
+        }
+
         for controller in data.controllers.iter_mut() {
             let mut feedback = Feedback::new();
             if let Some(player) = self.alive.get_mut(controller.serial()) {
@@ -110,8 +121,8 @@ impl State for Joust {
             controller.feedback(feedback);
         }
 
-        if self.alive.len() <= 1 {
-            return Transition::Replace(Box::new(Winner::new(self.alive.keys().next().cloned())));
+        if self.alive.len() <= 0 {
+            return Transition::Replace(Box::new(Winner::new(self.alive.keys().cloned())));
         }
 
         return Transition::None;

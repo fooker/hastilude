@@ -20,6 +20,7 @@ in pkgs.mkShell {
     pkgs.openssl
     pkgs.udev
     pkgs.dbus
+    pkgs.alsaLib
     pkgs.llvmPackages.llvm
     pkgs.llvmPackages.clang
     psmoveapi

@@ -2,8 +2,11 @@ use scarlet::color::RGBColor;
 
 use crate::psmove::{Battery, Feedback};
 use crate::state::{Data, State, Transition};
+use crate::sound::Music;
 
-pub struct Debug;
+pub struct Debug {
+    music: Music,
+}
 
 pub fn battery_to_color(battery: Battery) -> RGBColor {
     return match battery {
@@ -21,8 +24,14 @@ pub fn acceleration_to_color(a: cgmath::Vector3<f32>) -> RGBColor {
 }
 
 impl Debug {
-    pub fn new() -> Self {
-        return Self {};
+    pub fn new(data: &Data) -> Self {
+        // TODO: Error handling
+        let music = data.sound.music("assets/music/loop.ogg")
+            .expect("Can not load music");
+
+        return Self {
+            music,
+        };
     }
 }
 
@@ -39,13 +48,25 @@ impl State for Debug {
                     .led_color(acceleration_to_color(controller.input().accelerometer));
             }
 
-            feedback = feedback.rumble((controller.input().buttons.trigger.1 * 255.0) as u8);
+            if controller.input().buttons.swoosh {
+                feedback = feedback.rumble((controller.input().buttons.trigger.1 * 255.0) as u8);
+            }
 
             controller.feedback(feedback);
 
             if controller.input().buttons.start || controller.input().buttons.cross {
                 return Transition::Pop;
             }
+        }
+
+        if let Some(controller) = data.controllers.first() {
+            let speed = if controller.input().buttons.square {
+                (controller.input().buttons.trigger.1 * 127.0) as i8
+            } else {
+                (controller.input().buttons.trigger.1 * -127.0) as i8
+            };
+
+            self.music.speed(speed);
         }
 
         return Transition::None;
