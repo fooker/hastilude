@@ -1,15 +1,21 @@
 use std::collections::HashSet;
-
-use crate::psmove::{Battery, Feedback};
-use crate::state::{Data, State, Transition};
-use tokio::time::Instant;
 use std::time::Duration;
+
+use scarlet::color::RGBColor;
+use tokio::time::Instant;
+
+use crate::psmove::Feedback;
+use crate::state::{Data, State, Transition};
 
 struct Countdown {
     start: Instant,
 }
 
 impl Countdown {
+    const COLOR_1: RGBColor = RGBColor { r: 1.0, g: 0.0, b: 0.0 };
+    const COLOR_2: RGBColor = RGBColor { r: 1.0, g: 1.0, b: 0.0 };
+    const COLOR_3: RGBColor = RGBColor { r: 0.0, g: 1.0, b: 0.0 };
+
     pub fn new() -> Self {
         return Self {
             start: Instant::now(),
@@ -28,11 +34,11 @@ impl State for Countdown {
             }
 
             if elapsed < Duration::from_secs(1) {
-                feedback = feedback.led_color((0xff, 0x00, 0x00));
+                feedback = feedback.led_color(Self::COLOR_1);
             } else if elapsed < Duration::from_secs(2) {
-                feedback = feedback.led_color((0xff, 0xff, 0x00));
+                feedback = feedback.led_color(Self::COLOR_2);
             } else if elapsed < Duration::from_secs(3) {
-                feedback = feedback.led_color((0x00, 0xff, 0x00));
+                feedback = feedback.led_color(Self::COLOR_3);
             }
 
             controller.feedback(feedback);
@@ -82,25 +88,15 @@ impl State for Lobby {
                 self.ready.insert(controller.serial().to_string());
             }
 
-            // Show battery state while pressing circle
+            let mut feedback = Feedback::new();
+
             if controller.input().buttons.circle {
-                controller.feedback(Feedback::new()
-                    .led_color(match controller.battery() {
-                        Battery::Draining(level) => {
-                            let level = (level * 255.0) as u8;
-                            (0xFF - level, level, 0x00)
-                        }
-                        Battery::Charging => (0x00, 0x00, 0xFF),
-                        Battery::Charged => (0x00, 0xFF, 0x00),
-                        Battery::Unknown => (0x00, 0x00, 0x00),
-                    }));
+                feedback = feedback.led_color(super::debug::battery_to_color(controller.battery()));
             } else if self.ready.contains(controller.serial()) {
-                controller.feedback(Feedback::new()
-                    .led_color((0xff, 0xff, 0xff)));
-            } else {
-                controller.feedback(Feedback::new()
-                    .led_off());
+                feedback = feedback.led_color((0xff, 0xff, 0xff));
             }
+
+            controller.feedback(feedback);
         }
 
         if data.controllers.iter().all(|controller| self.ready.contains(controller.serial())) ||

@@ -9,6 +9,7 @@ use tokio::fs::{File, OpenOptions};
 use crate::psmove::proto::{Get, Set};
 use crate::psmove::proto::zcm1::{GetAddress, GetCalibration, GetCalibrationInner, GetInput, SetLED};
 
+mod proto;
 pub mod hid;
 
 #[derive(Debug, Default, Clone)]
@@ -37,7 +38,7 @@ impl<T> Limiter<T>
     where
         T: PartialEq,
 {
-    const MIN_UPDATE: Duration = Duration::from_millis(110);
+    const MIN_UPDATE: Duration = Duration::from_millis(10);
     const MAX_UPDATE: Duration = Duration::from_millis(4000);
 
     pub fn new(initial: T) -> Self {
@@ -88,34 +89,26 @@ impl<T> Default for Limiter<T>
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Feedback {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-
+    pub rgb: (u8, u8, u8),
     pub rumble: u8,
 }
 
 impl Feedback {
     pub fn new() -> Self {
         return Self {
-            r: 0,
-            g: 0,
-            b: 0,
+            rgb: (0, 0, 0),
             rumble: 0,
         };
     }
 
-    pub fn led_color(mut self, (r, g, b): (u8, u8, u8)) -> Self {
-        self.r = r;
-        self.g = g;
-        self.b = b;
+    pub fn led_color(mut self, color: impl Into<(u8, u8, u8)>) -> Self {
+        let color = color.into();
+        self.rgb = color;
         return self;
     }
 
     pub fn led_off(mut self) -> Self {
-        self.r = 0;
-        self.g = 0;
-        self.b = 0;
+        self.rgb = (0, 0, 0);
         return self;
     }
 
@@ -215,8 +208,6 @@ pub struct Controller {
     feedback: Limiter<Feedback>,
 }
 
-mod proto;
-
 impl Controller {
     pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
         let mut f = OpenOptions::new()
@@ -307,8 +298,8 @@ impl Controller {
         return &self.input;
     }
 
-    pub fn battery(&self) -> &Battery {
-        return &self.battery;
+    pub fn battery(&self) -> Battery {
+        return self.battery;
     }
 
     pub fn feedback(&mut self, feedback: Feedback) {

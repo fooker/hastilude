@@ -1,29 +1,28 @@
+use scarlet::color::RGBColor;
+
 use crate::psmove::{Battery, Feedback};
 use crate::state::{Data, State, Transition};
 
 pub struct Debug;
 
+pub fn battery_to_color(battery: Battery) -> RGBColor {
+    return match battery {
+        Battery::Draining(level) => RGBColor { r: 1.0 - level as f64, g: level as f64, b: 1.0 },
+        Battery::Charging => RGBColor { r: 0.0, g: 0.0, b: 1.0 },
+        Battery::Charged => RGBColor { r: 0.0, g: 1.0, b: 0.0 },
+        Battery::Unknown => RGBColor { r: 0.0, g: 0.0, b: 0.0 },
+    };
+}
+
+pub fn acceleration_to_color(a: cgmath::Vector3<f32>) -> RGBColor {
+    return From::<(u8, u8, u8)>::from(a
+        .map(|v| (v.abs().clamp(0.0, 1.0) * 255.0) as u8)
+        .into());
+}
+
 impl Debug {
     pub fn new() -> Self {
         return Self {};
-    }
-
-    fn battery_to_color(battery: &Battery) -> (u8, u8, u8) {
-        return match battery {
-            Battery::Draining(level) => {
-                let level = (level * 255.0) as u8;
-                (0xFF - level, level, 0x00)
-            }
-            Battery::Charging => (0x00, 0x00, 0xFF),
-            Battery::Charged => (0x00, 0xFF, 0x00),
-            Battery::Unknown => (0x00, 0x00, 0x00),
-        };
-    }
-
-    fn acceleration_to_color(a: cgmath::Vector3<f32>) -> (u8, u8, u8) {
-        return a
-            .map(|v| (v.abs().clamp(0.0, 1.0) * 255.0) as u8)
-            .into();
     }
 }
 
@@ -34,10 +33,10 @@ impl State for Debug {
 
             if controller.input().buttons.circle {
                 feedback = feedback
-                    .led_color(Self::battery_to_color(controller.battery()));
+                    .led_color(battery_to_color(controller.battery()));
             } else {
                 feedback = feedback
-                    .led_color(Self::acceleration_to_color(controller.input().accelerometer));
+                    .led_color(acceleration_to_color(controller.input().accelerometer));
             }
 
             feedback = feedback.rumble((controller.input().buttons.trigger.1 * 255.0) as u8);

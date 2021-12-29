@@ -123,9 +123,9 @@ impl SetLED {
     pub fn from(feedback: &Feedback) -> Self {
         return Self {
             _reserved1: [0],
-            r: feedback.r,
-            g: feedback.g,
-            b: feedback.b,
+            r: feedback.rgb.0,
+            g: feedback.rgb.1,
+            b: feedback.rgb.2,
             _reserved2: [0],
             rumble: feedback.rumble,
             _reserved3: [0, 0],
