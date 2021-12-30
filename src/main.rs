@@ -3,6 +3,7 @@ use anyhow::Result;
 use crate::games::{Game, Lobby};
 use crate::psmove::Controller;
 use crate::sound::Sound;
+use crate::state::StateMachine;
 
 pub mod psmove;
 pub mod state;
@@ -21,7 +22,6 @@ async fn main() -> Result<()> {
     //     println!("Device: {:?}", dev);
     // }
 
-
     let sound = Sound::init()?;
 
     let controllers = vec![
@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
         controllers,
     };
 
-    let mut state = state::StateMachine::new(Lobby::new(), &mut data);
+    let mut state = StateMachine::new(Lobby::new(), &mut data);
 
     while state.is_running() {
         for controller in data.controllers.iter_mut() {

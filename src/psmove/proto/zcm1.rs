@@ -8,15 +8,15 @@ use super::Report;
 
 const REPORT_GET_INPUT: u8 = 0x01;
 const REPORT_SET_LED: u8 = 0x06;
-const REPORT_SET_LED_PWM_FREQ: u8 = 0x03;
+// const REPORT_SET_LED_PWM_FREQ: u8 = 0x03;
 const REPORT_GET_BT_ADDR: u8 = 0x04;
-const REPORT_SET_BT_ADDR: u8 = 0x05;
+// const REPORT_SET_BT_ADDR: u8 = 0x05;
 const REPORT_GET_CALIBRATION: u8 = 0x10;
-const REPORT_SET_AUTH_CHALLENGE: u8 = 0xA0;
-const REPORT_GET_AUTH_RESOINSE: u8 = 0xA1;
-const REPORT_GET_EXT_DEVICE_INFO: u8 = 0xE0;
-const REPORT_SET_DFU_MODE: u8 = 0xF2;
-const REPORT_GET_FIRMWARE_INFO: u8 = 0xF9;
+// const REPORT_SET_AUTH_CHALLENGE: u8 = 0xA0;
+// const REPORT_GET_AUTH_RESOINSE: u8 = 0xA1;
+// const REPORT_GET_EXT_DEVICE_INFO: u8 = 0xE0;
+// const REPORT_SET_DFU_MODE: u8 = 0xF2;
+// const REPORT_GET_FIRMWARE_INFO: u8 = 0xF9;
 
 #[derive(PackedStruct, Debug, Copy, Clone)]
 #[packed_struct(bit_numbering = "msb0", endian = "lsb")]

@@ -26,7 +26,7 @@ pub enum Transition {
     /// Continue without change.
     None,
 
-    /// Remove the active state and resume the next state on the stack or shead if there are none.
+    /// Remove the active state and resume the next state on the stack or stop if no state is left.
     Pop,
 
     /// Pause the active state and push a new state onto the stack.
