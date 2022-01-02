@@ -1,11 +1,13 @@
 use crate::psmove::Controller;
 use crate::games::Game;
 use crate::sound::Sound;
+use crate::assets::Assets;
 
 pub struct Data {
     pub game: Game,
     pub sound: Sound,
     pub controllers: Vec<Controller>,
+    pub assets: Assets,
 }
 
 pub struct Event {}

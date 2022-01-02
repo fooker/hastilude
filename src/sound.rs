@@ -5,8 +5,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Source};
+
+use crate::assets::{AssetLoader, Asset};
 
 struct DynamicSource<I> {
     input: I,
@@ -98,26 +100,37 @@ pub struct Sound {
     handle: OutputStreamHandle,
 }
 
-pub struct Music {
+pub struct Playback {
     speed: Arc<AtomicI8>,
     stopped: Arc<AtomicBool>,
 }
 
-impl Music {
+impl Playback {
     pub fn speed(&mut self, speed: i8) {
         self.speed.store(speed, Ordering::SeqCst);
     }
 }
 
-impl Drop for Music {
+impl Drop for Playback {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::SeqCst);
     }
 }
 
+pub type Music = Decoder<BufReader<File>>;
+
+impl AssetLoader for Music {
+    type Asset = Music;
+
+    fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        return Ok(Decoder::new(BufReader::new(File::open(path)?))?);
+    }
+}
+
 impl Sound {
     pub fn init() -> Result<Self> {
-        let (output, handle) = OutputStream::try_default()?;
+        let (output, handle) = OutputStream::try_default()
+            .context("Failed to open default sound output stream")?;
 
         return Ok(Self {
             output,
@@ -125,19 +138,21 @@ impl Sound {
         });
     }
 
-    pub fn music(&self, path: impl AsRef<Path>) -> Result<Music> {
-        let source = Decoder::new(BufReader::new(File::open(path)?))?
+    pub fn music(&self, asset: &Asset<Music>) -> Playback {
+        let source = asset
+            .load()
             .repeat_infinite()
             .fade_in(Duration::from_secs(1));
 
         let source = DynamicSource::new(source);
-        let music = Music {
+        let music = Playback {
             speed: source.speed_handle(),
             stopped: source.stopped_handle(),
         };
 
-        self.handle.play_raw(source.convert_samples())?;
+        self.handle.play_raw(source.convert_samples())
+            .expect("Output dropped");
 
-        return Ok(music);
+        return music;
     }
 }

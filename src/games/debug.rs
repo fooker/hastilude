@@ -2,11 +2,11 @@ use scarlet::color::RGBColor;
 use scarlet::colorpoint::ColorPoint;
 
 use crate::psmove::{Battery, Feedback};
-use crate::sound::Music;
+use crate::sound::Playback;
 use crate::state::{Data, State, Transition};
 
 pub struct Debug {
-    music: Music,
+    music: Playback,
 }
 
 pub fn battery_to_color(battery: Battery) -> RGBColor {
@@ -31,10 +31,11 @@ pub fn vector_to_color(a: cgmath::Vector3<f32>) -> RGBColor {
 }
 
 impl Debug {
+    const COLOR_WHITE: RGBColor = RGBColor { r: 1.0, g: 1.0, b: 1.0 };
+
     pub fn new(data: &Data) -> Self {
-        // TODO: Error handling
-        let music = data.sound.music("assets/music/loop.ogg")
-            .expect("Can not load music");
+        let music = data.assets.music.random();
+        let music = data.sound.music(music);
 
         return Self {
             music,
@@ -44,10 +45,16 @@ impl Debug {
 
 impl State for Debug {
     fn on_update(&mut self, data: &mut Data) -> Transition {
+        let triangle = data.controllers.iter()
+            .any(|controller| controller.input().buttons.triangle);
+
         for controller in data.controllers.iter_mut() {
             let mut feedback = Feedback::new();
 
-            if controller.input().buttons.circle {
+            if triangle {
+                feedback = feedback
+                    .led_color(Self::COLOR_WHITE);
+            } else if controller.input().buttons.circle {
                 feedback = feedback
                     .led_color(battery_to_color(controller.battery()));
             } else {
@@ -57,6 +64,10 @@ impl State for Debug {
 
             if controller.input().buttons.swoosh {
                 feedback = feedback.rumble((controller.input().buttons.trigger.1 * 255.0) as u8);
+            }
+
+            if controller.input().buttons.select {
+                self.music = data.sound.music(data.assets.music.random());
             }
 
             controller.feedback(feedback);

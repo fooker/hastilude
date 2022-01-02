@@ -9,7 +9,7 @@ use scarlet::colors::HSVColor;
 
 use crate::games::meta::Winner;
 use crate::psmove::Feedback;
-use crate::sound::Music;
+use crate::sound::Playback;
 use crate::state::{Data, State, Transition};
 
 struct Player {
@@ -35,7 +35,7 @@ impl Speed {
 }
 
 pub struct Joust {
-    music: Music,
+    music: Playback,
     alive: HashMap<String, Player>,
     speed: (Speed, Instant),
 }
@@ -47,9 +47,8 @@ impl Joust {
     const MUSIC_TIME_MAX: Duration = Duration::from_secs(23);
 
     pub fn new(data: &Data) -> Self {
-        // TODO: Error handling
-        let music = data.sound.music("assets/music/loop.ogg")
-            .expect("Can not load music");
+        let music = data.assets.music.random();
+        let music = data.sound.music(music);
 
         return Self {
             music,
