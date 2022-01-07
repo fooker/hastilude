@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
+use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -13,7 +13,7 @@ use crate::assets::{AssetLoader, Asset};
 struct DynamicSource<I> {
     input: I,
 
-    speed: Arc<AtomicI8>,
+    speed: Arc<Mutex<f32>>,
     stopped: Arc<AtomicBool>,
 }
 
@@ -27,12 +27,12 @@ impl<I> DynamicSource<I>
     pub fn new(input: I) -> Self {
         return Self {
             input,
-            speed: Arc::new(AtomicI8::new(0)),
+            speed: Arc::new(Mutex::new(1.0)),
             stopped: Arc::new(AtomicBool::new(false)),
         };
     }
 
-    pub fn speed_handle(&self) -> Arc<AtomicI8> {
+    pub fn speed_handle(&self) -> Arc<Mutex<f32>> {
         return self.speed.clone();
     }
 
@@ -85,8 +85,9 @@ impl<I> Source for DynamicSource<I>
     }
 
     fn sample_rate(&self) -> u32 {
-        let speed = self.speed.load(Ordering::Relaxed) as i64 + 255;
-        return (self.input.sample_rate() as i64 * speed / 255) as u32;
+        let speed = *self.speed.lock()
+            .expect("Failed to lock");
+        return (self.input.sample_rate() as f32 * speed) as u32;
     }
 
     fn total_duration(&self) -> Option<Duration> {
@@ -101,13 +102,14 @@ pub struct Sound {
 }
 
 pub struct Playback {
-    speed: Arc<AtomicI8>,
+    speed: Arc<Mutex<f32>>,
     stopped: Arc<AtomicBool>,
 }
 
 impl Playback {
-    pub fn speed(&mut self, speed: i8) {
-        self.speed.store(speed, Ordering::SeqCst);
+    pub fn speed(&mut self, speed: f32) {
+        *self.speed.lock()
+            .expect("Failed to lock") = speed;
     }
 }
 

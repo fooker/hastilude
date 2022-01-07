@@ -11,6 +11,7 @@ use crate::games::meta::Winner;
 use crate::psmove::Feedback;
 use crate::sound::Playback;
 use crate::state::{Data, State, Transition};
+use crate::animation::Animated;
 
 struct Player {
     hue: f64,
@@ -25,23 +26,39 @@ enum Speed {
 }
 
 impl Speed {
-    pub fn music(self) -> i8 {
+    pub fn music(self) -> f32 {
         return match self {
-            Speed::NORMAL => 0,
-            Speed::FAST => i8::MAX,
-            Speed::SLOW => i8::MIN,
+            Speed::NORMAL => 0.0,
+            Speed::FAST => 1.5,
+            Speed::SLOW => 0.5,
+        };
+    }
+
+    pub fn threshold(self) -> f32 {
+        return match self {
+            Speed::NORMAL => 3.2,
+            Speed::FAST => 4.5,
+            Speed::SLOW => 2.1,
         };
     }
 }
 
 pub struct Joust {
-    music: Playback,
     alive: HashMap<String, Player>,
+
     speed: (Speed, Instant),
+
+    music: Playback,
+    music_speed: Animated<f32>,
+
+    threshold: Animated<f32>,
 }
 
 impl Joust {
-    const MAX_SPEED: f32 = 3.2;
+    const CHANGE_SPEED_MUSIC: f32 = 2.0;
+
+    // Change threshold slower than music to give some players time to adapt
+    const CHANGE_SPEED_THRESHOLD: f32 = 0.7;
 
     const MUSIC_TIME_MIN: Duration = Duration::from_secs(10);
     const MUSIC_TIME_MAX: Duration = Duration::from_secs(23);
@@ -51,9 +68,11 @@ impl Joust {
         let music = data.sound.music(music);
 
         return Self {
-            music,
             alive: HashMap::new(),
             speed: (Speed::NORMAL, Instant::now()),
+            music,
+            music_speed: Animated::new(Speed::NORMAL.music(), Self::CHANGE_SPEED_MUSIC),
+            threshold: Animated::new(Speed::NORMAL.threshold(), Self::CHANGE_SPEED_THRESHOLD),
         };
     }
 }
@@ -76,9 +95,14 @@ impl State for Joust {
     fn on_resume(&mut self, _: &mut Data) {
         let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
         self.speed = (Speed::NORMAL, Instant::now() + duration);
+        self.music_speed = Animated::new(Speed::NORMAL.music(), Self::CHANGE_SPEED_MUSIC);
+        self.threshold = Animated::new(Speed::NORMAL.threshold(), Self::CHANGE_SPEED_THRESHOLD);
     }
 
-    fn on_update(&mut self, data: &mut Data) -> Transition {
+    fn on_update(&mut self, data: &mut Data, duration: Duration) -> Transition {
+        self.music_speed.update(duration);
+        self.threshold.update(duration);
+
         let now = Instant::now();
         if self.speed.1 < now {
             let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
@@ -93,7 +117,7 @@ impl State for Joust {
                 Speed::SLOW => Speed::NORMAL,
             };
 
-            self.music.speed(speed.music());
+            self.music.speed(self.music_speed.value());
 
             self.speed = (speed, now + duration);
         }
@@ -102,7 +126,7 @@ impl State for Joust {
             let mut feedback = Feedback::new();
             if let Some(player) = self.alive.get_mut(controller.serial()) {
                 player.accel_buffer.write((1.0 - controller.input().accelerometer.magnitude()).abs());
-                let accel = player.accel_buffer.iter().sum::<f32>() / Self::MAX_SPEED;
+                let accel = player.accel_buffer.iter().sum::<f32>() / self.threshold.value();
 
                 if accel >= 1.0 {
                     self.alive.remove(controller.serial());

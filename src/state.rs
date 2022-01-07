@@ -2,6 +2,7 @@ use crate::psmove::Controller;
 use crate::games::Game;
 use crate::sound::Sound;
 use crate::assets::Assets;
+use std::time::Duration;
 
 pub struct Data {
     pub game: Game,
@@ -21,7 +22,7 @@ pub trait State {
 
     fn on_event(&mut self, _: &mut Data, _: Event) -> Transition { return Transition::None; }
 
-    fn on_update(&mut self, _: &mut Data) -> Transition { return Transition::None; }
+    fn on_update(&mut self, _: &mut Data, _: Duration) -> Transition { return Transition::None; }
 }
 
 pub enum Transition {
@@ -77,9 +78,9 @@ impl StateMachine {
         self.transition(trans, data);
     }
 
-    pub fn update(&mut self, data: &mut Data) {
+    pub fn update(&mut self, data: &mut Data, duration: Duration) {
         let trans = match self.stack.last_mut() {
-            Some(state) => state.on_update(data),
+            Some(state) => state.on_update(data, duration),
             None => Transition::None,
         };
 

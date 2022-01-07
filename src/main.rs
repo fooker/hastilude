@@ -6,12 +6,14 @@ use crate::sound::Sound;
 use crate::state::StateMachine;
 use crate::assets::Assets;
 use tracing::Level;
+use std::time::Instant;
 
 pub mod psmove;
 pub mod state;
 pub mod sound;
 pub mod games;
 pub mod assets;
+pub mod animation;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -50,13 +52,19 @@ async fn main() -> Result<()> {
 
     let mut state = StateMachine::new(Lobby::new(), &mut data);
 
+    let mut last = Instant::now();
+
     while state.is_running() {
+        let now = Instant::now();
+
         for controller in data.controllers.iter_mut() {
             controller.update().await
                 .with_context(|| format!("Failed to update controller: {}", controller.serial()))?;
         }
 
-        state.update(&mut data);
+        state.update(&mut data, now - last);
+
+        last = now;
     }
 
     return Ok(());

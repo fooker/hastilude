@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use crate::games::meta::Countdown;
 use crate::psmove::Feedback;
 use crate::state::{Data, State, Transition};
+use std::time::Duration;
 
 pub struct Lobby {
     ready: HashSet<String>,
@@ -34,7 +35,7 @@ impl State for Lobby {
         self.reset(data);
     }
 
-    fn on_update(&mut self, data: &mut Data) -> Transition {
+    fn on_update(&mut self, data: &mut Data, _: Duration) -> Transition {
         for controller in data.controllers.iter_mut() {
             if controller.input().buttons.trigger.0 {
                 self.ready.insert(controller.serial().to_string());

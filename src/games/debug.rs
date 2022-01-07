@@ -4,6 +4,7 @@ use scarlet::colorpoint::ColorPoint;
 use crate::psmove::{Battery, Feedback};
 use crate::sound::Playback;
 use crate::state::{Data, State, Transition};
+use std::time::Duration;
 
 pub struct Debug {
     music: Playback,
@@ -44,7 +45,7 @@ impl Debug {
 }
 
 impl State for Debug {
-    fn on_update(&mut self, data: &mut Data) -> Transition {
+    fn on_update(&mut self, data: &mut Data, _: Duration) -> Transition {
         let triangle = data.controllers.iter()
             .any(|controller| controller.input().buttons.triangle);
 
@@ -79,9 +80,9 @@ impl State for Debug {
 
         if let Some(controller) = data.controllers.first() {
             let speed = if controller.input().buttons.square {
-                (controller.input().buttons.trigger.1 * 127.0) as i8
+                controller.input().buttons.trigger.1 * 1.5
             } else {
-                (controller.input().buttons.trigger.1 * -127.0) as i8
+                controller.input().buttons.trigger.1 * -1.5
             };
 
             self.music.speed(speed);
