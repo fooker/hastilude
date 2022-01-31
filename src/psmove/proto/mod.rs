@@ -2,8 +2,7 @@ use std::os::unix::prelude::AsRawFd;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use packed_struct::{PackedStruct, PackedStructSlice};
-use packed_struct::prelude::bits::ByteArray;
+use packed_struct::prelude::{bits::ByteArray, PackedStruct, PackedStructSlice};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -122,5 +121,30 @@ impl<R> Setter<R> for Feature
         })?;
 
         return Ok(());
+    }
+}
+
+#[derive(PackedStruct, Debug)]
+#[packed_struct(bit_numbering = "msb0", endian = "lsb")]
+pub struct Address {
+    data: [u8; 6],
+}
+
+impl Address {
+    pub fn as_string(&self) -> String {
+        return format!("{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                       self.data[5], self.data[4], self.data[3], self.data[2], self.data[1], self.data[0]);
+    }
+}
+
+impl AsRef<[u8]> for Address {
+    fn as_ref(&self) -> &[u8] {
+        return &self.data;
+    }
+}
+
+impl AsRef<[u8;6]> for Address {
+    fn as_ref(&self) -> &[u8;6] {
+        return &self.data;
     }
 }

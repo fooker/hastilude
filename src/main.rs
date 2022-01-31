@@ -1,19 +1,21 @@
-use anyhow::{Result, Context};
-
-use crate::games::{Game, Lobby};
-use crate::psmove::Controller;
-use crate::sound::Sound;
-use crate::state::StateMachine;
-use crate::assets::Assets;
-use tracing::Level;
 use std::time::Instant;
 
+use anyhow::{Context, Result};
+use tracing::Level;
+
+use crate::engine::assets::Assets;
+use crate::engine::players::Controllers;
+use crate::engine::sound::Sound;
+use crate::engine::state::{StateMachine, World};
+use crate::games::GameType;
+use crate::lobby::Lobby;
+use crate::psmove::Controller;
+
 pub mod psmove;
-pub mod state;
-pub mod sound;
+pub mod engine;
 pub mod games;
-pub mod assets;
-pub mod animation;
+pub mod lobby;
+pub mod debug;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,6 +24,12 @@ async fn main() -> Result<()> {
         .with_ansi(true)
         .pretty()
         .init();
+
+    let mut controllers = Controllers::init().await
+        .context("Failed to initialize players")?;
+
+    controllers.register(Controller::new("/dev/hidraw13").await?);
+    controllers.register(Controller::new("/dev/hidraw14").await?);
 
     // let mut monitor = psmove::hid::Monitor::new()?;
     //
@@ -33,39 +41,31 @@ async fn main() -> Result<()> {
     //     println!("Device: {:?}", dev);
     // }
 
-    let sound = Sound::init()
+    let mut sound = Sound::init()
         .context("Failed to initialize sound")?;
 
-    let controllers = vec![
-        Controller::new("/dev/hidraw6").await?,
-    ];
-
-    let assets = Assets::init(std::env::current_dir()?)
+    let assets = Assets::init(std::env::current_dir()?.join("assets"))
         .context("Failed to initialize assets")?;
-
-    let mut data = state::Data {
-        game: Game::Joust,
-        sound,
-        controllers,
-        assets,
-    };
-
-    let mut state = StateMachine::new(Lobby::new(), &mut data);
 
     let mut last = Instant::now();
 
-    while state.is_running() {
+    // Initialize fresh state machine
+    let mut state = StateMachine::new(Lobby::new(&mut controllers));
+
+    loop {
         let now = Instant::now();
 
-        for controller in data.controllers.iter_mut() {
-            controller.update().await
-                .with_context(|| format!("Failed to update controller: {}", controller.serial()))?;
-        }
+        controllers.update().await
+            .context("Failed to update players")?;
 
-        state.update(&mut data, now - last);
+        state.update(&mut World {
+            game: GameType::Joust,
+            now,
+            controllers: &mut controllers,
+            sound: &mut sound,
+            assets: &assets,
+        }, now - last);
 
         last = now;
     }
-
-    return Ok(());
 }

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use cgmath::InnerSpace;
@@ -7,18 +7,36 @@ use rand::Rng;
 use scarlet::color::{Color, RGBColor};
 use scarlet::colors::HSVColor;
 
-use crate::games::meta::Winner;
+use crate::engine::animation::Fader;
+use crate::engine::players::{ControllerId, PlayerData};
+use crate::engine::sound::Playback;
+use crate::engine::state::{State, World};
+use crate::games::Game;
+use crate::games::meta::{PlayerColor, Winner};
 use crate::psmove::Feedback;
-use crate::sound::Playback;
-use crate::state::{Data, State, Transition};
-use crate::animation::Animated;
 
-struct Player {
+pub struct Player {
+    alive: bool,
+
+    accel: HistoryBuffer<f32, 4>,
+
     hue: f64,
-    accel_buffer: HistoryBuffer<f32, 4>,
 }
 
-#[derive(Debug,Copy, Clone)]
+impl PlayerColor for Player {
+    fn color(&self) -> RGBColor {
+        let accel = self.accel.recent().copied()
+            .unwrap_or(0.0);
+
+        return HSVColor {
+            h: self.hue,
+            s: 1.0,
+            v: 1.0 - f32::sqrt(accel) as f64,
+        }.convert::<RGBColor>();
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 enum Speed {
     NORMAL,
     FAST,
@@ -28,7 +46,7 @@ enum Speed {
 impl Speed {
     pub fn music(self) -> f32 {
         return match self {
-            Speed::NORMAL => 0.0,
+            Speed::NORMAL => 1.0,
             Speed::FAST => 1.5,
             Speed::SLOW => 0.5,
         };
@@ -36,75 +54,41 @@ impl Speed {
 
     pub fn threshold(self) -> f32 {
         return match self {
-            Speed::NORMAL => 3.2,
-            Speed::FAST => 4.5,
-            Speed::SLOW => 2.1,
+            Speed::NORMAL => 0.6,
+            Speed::FAST => 0.9,
+            Speed::SLOW => 0.3,
         };
     }
 }
 
 pub struct Joust {
-    alive: HashMap<String, Player>,
+    data: PlayerData<Player>,
 
     speed: (Speed, Instant),
 
     music: Playback,
-    music_speed: Animated<f32>,
+    music_speed: Fader,
 
-    threshold: Animated<f32>,
+    threshold: Fader,
 }
 
 impl Joust {
-    const CHANGE_SPEED_MUSIC: f32 = 2.0;
+    const CHANGE_SPEED_MUSIC: Duration = Duration::from_millis(500);
 
     // Change threshold slower than music to give some players time to adapt
-    const CHANGE_SPEED_THRESHOLD: f32 = 0.7;
+    const CHANGE_SPEED_THRESHOLD: Duration = Self::CHANGE_SPEED_MUSIC.saturating_mul(3);
 
-    const MUSIC_TIME_MIN: Duration = Duration::from_secs(10);
-    const MUSIC_TIME_MAX: Duration = Duration::from_secs(23);
-
-    pub fn new(data: &Data) -> Self {
-        let music = data.assets.music.random();
-        let music = data.sound.music(music);
-
-        return Self {
-            alive: HashMap::new(),
-            speed: (Speed::NORMAL, Instant::now()),
-            music,
-            music_speed: Animated::new(Speed::NORMAL.music(), Self::CHANGE_SPEED_MUSIC),
-            threshold: Animated::new(Speed::NORMAL.threshold(), Self::CHANGE_SPEED_THRESHOLD),
-        };
-    }
+    const MUSIC_TIME_MIN: Duration = Duration::from_secs(15);
+    const MUSIC_TIME_MAX: Duration = Duration::from_secs(30);
 }
 
 impl State for Joust {
-    fn on_start(&mut self, data: &mut Data) {
-        let hue_base: f64 = rand::random();
-        let hue_step: f64 = 1.0 / data.controllers.len() as f64;
-
-        // Initially, all players are alive
-        self.alive = data.controllers.iter()
-            .enumerate()
-            .map(|(i, controller)| (controller.serial().to_string(), Player {
-                hue: ((hue_base + hue_step * i as f64) * 360.0) % 360.0,
-                accel_buffer: HistoryBuffer::new(),
-            }))
-            .collect();
-    }
-
-    fn on_resume(&mut self, _: &mut Data) {
-        let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
-        self.speed = (Speed::NORMAL, Instant::now() + duration);
-        self.music_speed = Animated::new(Speed::NORMAL.music(), Self::CHANGE_SPEED_MUSIC);
-        self.threshold = Animated::new(Speed::NORMAL.threshold(), Self::CHANGE_SPEED_THRESHOLD);
-    }
-
-    fn on_update(&mut self, data: &mut Data, duration: Duration) -> Transition {
+    fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> Box<dyn State> {
         self.music_speed.update(duration);
         self.threshold.update(duration);
 
-        let now = Instant::now();
-        if self.speed.1 < now {
+        // Check if speed is about to change
+        if self.speed.1 < world.now {
             let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
 
             let speed = match self.speed.0 {
@@ -117,37 +101,83 @@ impl State for Joust {
                 Speed::SLOW => Speed::NORMAL,
             };
 
-            self.music.speed(self.music_speed.value());
+            self.music_speed.set(speed.music());
 
-            self.speed = (speed, now + duration);
+            self.speed = (speed, world.now + duration);
         }
 
-        for controller in data.controllers.iter_mut() {
+        // Update music speed
+        self.music.speed(self.music_speed.value());
+
+        // Update players
+        for (controller, data) in world.controllers.with_data(&mut self.data)
+            .existing() {
             let mut feedback = Feedback::new();
-            if let Some(player) = self.alive.get_mut(controller.serial()) {
-                player.accel_buffer.write((1.0 - controller.input().accelerometer.magnitude()).abs());
-                let accel = player.accel_buffer.iter().sum::<f32>() / self.threshold.value();
 
-                if accel >= 1.0 {
-                    self.alive.remove(controller.serial());
+            if data.alive {
+                data.accel.write((1.0 - controller.input().accelerometer.magnitude()).abs());
+                let accel = data.accel.iter().sum::<f32>() / data.accel.len() as f32;
+                let accel = accel / self.threshold.value();
 
+                if dbg!(accel) >= 1.0 {
+                    // TODO: Buzz loosing player
+                    data.alive = false;
                     feedback = feedback.led_off();
                 } else {
                     feedback = feedback.led_color(HSVColor {
-                        h: player.hue,
+                        h: data.hue,
                         s: 1.0,
-                        v: 1.0 - accel as f64,
+                        v: 1.0 - f32::sqrt(accel) as f64,
                     }.convert::<RGBColor>());
                 }
-            } else {}
+            }
 
             controller.feedback(feedback);
         }
 
-        if self.alive.len() <= 0 {
-            return Transition::Replace(Box::new(Winner::new(self.alive.keys().cloned())));
+        // Check if at least one player is alive
+        let alive = self.data.iter()
+            .filter_map(|(id, data)| if data.alive { Some(id) } else { None })
+            .collect::<HashSet<_>>();
+
+        if alive.len() <= 1 {
+            return Box::new(Winner::new(alive));
         }
 
-        return Transition::None;
+        return self;
+    }
+}
+
+impl Game for Joust {
+    type Data = Player;
+
+    fn create(players: HashSet<ControllerId>, world: &mut World) -> Self {
+        let music = world.assets.music.random();
+        let music = world.sound.music(music);
+
+        // Create players and assign colors
+        let hue_base: f64 = rand::random();
+        let hue_step: f64 = 1.0 / world.controllers.count() as f64;
+
+        let players = PlayerData::init_with(players.into_iter()
+            .enumerate()
+            .map(|(i, id)| (id, Player {
+                alive: true,
+                accel: HistoryBuffer::new(),
+                hue: ((hue_base + hue_step * i as f64) * 360.0) % 360.0,
+            }))
+            .collect());
+
+        return Self {
+            data: players,
+            speed: (Speed::NORMAL, Instant::now()),
+            music,
+            music_speed: Fader::new(Speed::NORMAL.music(), Self::CHANGE_SPEED_MUSIC),
+            threshold: Fader::new(Speed::NORMAL.threshold(), Self::CHANGE_SPEED_THRESHOLD),
+        };
+    }
+
+    fn data(&mut self) -> &mut PlayerData<Self::Data> {
+        return &mut self.data;
     }
 }

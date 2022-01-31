@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Source};
+use crate::engine::assets::{AssetLoader, Asset};
 
-use crate::assets::{AssetLoader, Asset};
 
 struct DynamicSource<I> {
     input: I,

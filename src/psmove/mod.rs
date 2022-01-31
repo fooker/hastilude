@@ -1,3 +1,4 @@
+use std::collections::hash_map::DefaultHasher;
 use std::ops::Deref;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -6,8 +7,9 @@ use anyhow::Result;
 use cgmath::{ElementWise, Zero};
 use tokio::fs::{File, OpenOptions};
 
-use crate::psmove::proto::{Get, Set};
+use crate::psmove::proto::{Address, Get, Set};
 use crate::psmove::proto::zcm1::{GetAddress, GetCalibration, GetCalibrationInner, GetInput, SetLED};
+use std::hash::Hasher;
 
 mod proto;
 pub mod hid;
@@ -39,7 +41,7 @@ impl<T> Limiter<T>
         T: PartialEq,
 {
     const MIN_UPDATE: Duration = Duration::from_millis(10);
-    const MAX_UPDATE: Duration = Duration::from_millis(4000);
+    const MAX_UPDATE: Duration = Duration::from_millis(1000);
 
     pub fn new(initial: T) -> Self {
         return Self {
@@ -197,7 +199,7 @@ pub struct Controller {
     f: File,
 
     /// The bluetooth address of the controller
-    address: String,
+    address: Address,
 
     /// Calibration data received from the controller
     calibration: Calibration,
@@ -218,7 +220,7 @@ impl Controller {
 
         // Get device address
         let address = GetAddress::get(&mut f).await?
-            .controller.as_string();
+            .controller;
 
         // Collect calibration data from device
         let calibration = GetCalibration::stitch([
@@ -237,8 +239,15 @@ impl Controller {
         });
     }
 
-    pub fn serial(&self) -> &str {
+    pub fn serial(&self) -> &Address {
         return &self.address;
+    }
+
+    /// A unique id of that controller
+    pub fn id(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        hasher.write(self.address.as_ref());
+        return hasher.finish();
     }
 
     pub async fn update(&mut self) -> Result<()> {

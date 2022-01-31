@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use rand::seq::SliceRandom;
 use tracing::trace_span;
 
-use crate::sound::Music;
+use crate::engine::sound::Music;
 
 pub trait AssetLoader: Sized {
     type Asset;
@@ -35,11 +35,12 @@ pub struct AssetBundle<L: AssetLoader> {
 
 impl<L: AssetLoader> AssetBundle<L> {
     pub(self) fn load(path: impl AsRef<Path>) -> Result<Self> {
-        let assets = path.as_ref().read_dir()?
+        let assets = path.as_ref().read_dir()
+            .with_context(|| format!("Failed to open asset directory: {:?}", path.as_ref()))?
             .map(|entry| {
                 let entry = entry?;
                 let name = entry.path().file_stem()
-                    .ok_or(anyhow!("Invalid filename"))?
+                    .ok_or(anyhow!("Invalid filename: {:?}", entry.path()))?
                     .to_string_lossy().to_string();
 
                 return Ok(Asset {
@@ -76,7 +77,8 @@ pub struct Assets {
 
 impl Assets {
     pub fn init(path: impl AsRef<Path>) -> Result<Self> {
-        let music = AssetBundle::load(path.as_ref().join("music"))?;
+        let music = AssetBundle::load(path.as_ref().join("music"))
+            .context("Failed to load music assets")?;
 
         return Ok(Self {
             music,
