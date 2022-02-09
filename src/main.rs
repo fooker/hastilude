@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tracing::Level;
 
 use crate::engine::assets::Assets;
-use crate::engine::players::Controllers;
+use crate::engine::players::Players;
 use crate::engine::sound::Sound;
 use crate::engine::state::{StateMachine, World};
 use crate::games::GameType;
@@ -25,11 +25,11 @@ async fn main() -> Result<()> {
         .pretty()
         .init();
 
-    let mut controllers = Controllers::init().await
+    let mut players = Players::init().await
         .context("Failed to initialize players")?;
 
-    controllers.register(Controller::new("/dev/hidraw13").await?);
-    controllers.register(Controller::new("/dev/hidraw14").await?);
+    players.register(Controller::new("/dev/hidraw13").await?);
+    players.register(Controller::new("/dev/hidraw14").await?);
 
     // let mut monitor = psmove::hid::Monitor::new()?;
     //
@@ -50,21 +50,22 @@ async fn main() -> Result<()> {
     let mut last = Instant::now();
 
     // Initialize fresh state machine
-    let mut state = StateMachine::new(Lobby::new(&mut controllers));
+    let mut state = StateMachine::new(Lobby::new(&mut players));
 
     loop {
         let now = Instant::now();
+        let duration = now - last;
 
-        controllers.update().await
+        players.update(duration).await
             .context("Failed to update players")?;
 
         state.update(&mut World {
             game: GameType::Joust,
             now,
-            controllers: &mut controllers,
+            players: &mut players,
             sound: &mut sound,
             assets: &assets,
-        }, now - last);
+        }, duration);
 
         last = now;
     }

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use replace_with::replace_with_or_abort;
 
 use crate::engine::assets::Assets;
-use crate::engine::players::Controllers;
+use crate::engine::players::Players;
 use crate::engine::sound::Sound;
 use crate::games::GameType;
 
@@ -14,7 +14,7 @@ pub struct World<'a> {
     // Current time of the frame
     pub now: Instant,
 
-    pub controllers: &'a mut Controllers,
+    pub players: &'a mut Players,
 
     pub sound: &'a mut Sound,
 

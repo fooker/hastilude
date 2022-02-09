@@ -5,11 +5,11 @@ use std::time::Duration;
 use scarlet::color::{Color, RGBColor};
 use scarlet::colors::HSVColor;
 
-use crate::engine::players::{ControllerId, PlayerData};
+use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::state::{State, World};
 use crate::games::Game;
+use crate::keyframes;
 use crate::lobby::Lobby;
-use crate::psmove::Feedback;
 
 pub trait PlayerColor {
     fn color(&self) -> RGBColor;
@@ -38,7 +38,15 @@ impl<T> Countdown<T>
         (Self::PHASE.saturating_mul(3)..Self::PHASE.saturating_mul(3).saturating_add(Self::LIGHT)),
     ];
 
-    pub fn new(game: T) -> Self {
+    pub fn new(mut game: T, world: &mut World) -> Self {
+        // Short initial buzz for all players
+        for (player, _) in world.players.with_data(game.data()).existing() {
+            player.rumble.animate(keyframes![
+                0.0 => 127,
+                0.1 => 0,
+            ]);
+        }
+
         return Self {
             game,
             elapsed: Duration::ZERO,
@@ -54,21 +62,12 @@ impl<T> State for Countdown<T>
     fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> Box<dyn State> {
         self.elapsed += duration;
 
-        for (controller, data) in world.controllers.with_data(self.game.data()).existing() {
-            let mut feedback = Feedback::new();
-
-            // Short initial buzz
-            if self.elapsed < Duration::from_millis(100) {
-                feedback = feedback.rumble(0x7F);
-            }
-
+        for (player, data) in world.players.with_data(self.game.data()).existing() {
             if Self::STEPS[0].contains(&self.elapsed) ||
                 Self::STEPS[1].contains(&self.elapsed) ||
                 Self::STEPS[2].contains(&self.elapsed) {
-                feedback = feedback.led_color(data.color());
+                player.color.set(data.color());
             }
-
-            controller.feedback(feedback);
         }
 
         if self.elapsed >= Self::PHASE * 4 {
@@ -85,9 +84,27 @@ pub struct Winner {
 }
 
 impl Winner {
-    pub fn new(winners: HashSet<ControllerId>) -> Self {
+    pub fn new(winners: HashSet<PlayerId>, world: &mut World) -> Self {
+        let mut winners = PlayerData::init(winners, || ());
+
+        for (player, _) in world.players.with_data(&mut winners).existing() {
+            player.rumble.animate(keyframes![
+                0.4 => 0   @ quadratic_in_out,
+                0.1 => 200 @ quadratic_in_out,
+                0.1 => 0   @ quadratic_in_out,
+
+                0.4 => 0   @ quadratic_in_out,
+                0.1 => 200 @ quadratic_in_out,
+                0.1 => 0   @ quadratic_in_out,
+
+                0.4 => 0   @ quadratic_in_out,
+                0.4 => 200 @ quadratic_in_out,
+                0.4 => 0   @ quadratic_in_out,
+            ]);
+        }
+
         return Self {
-            winners: PlayerData::init(winners, || ()),
+            winners,
             elapsed: Duration::ZERO,
         };
     }
@@ -97,25 +114,19 @@ impl State for Winner {
     fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> Box<dyn State> {
         self.elapsed += duration;
 
-        for (controller, ()) in world.controllers.with_data(&mut self.winners)
+        for (player, ()) in world.players.with_data(&mut self.winners)
             .existing() {
-            let mut feedback = Feedback::new();
-
-            feedback = feedback.led_color(HSVColor {
+            // TODO: Make this an animation
+            // TODO: Flashing in random colors - like a firework
+            player.color.set(HSVColor {
                 h: (self.elapsed.as_secs_f64() * 90.0) % 360.0,
                 s: 1.0,
-                v: 1.0
+                v: 1.0,
             }.convert::<RGBColor>());
-
-            if self.elapsed < Duration::from_millis(1500) {
-                feedback = feedback.rumble(((self.elapsed.as_secs_f32() * std::f32::consts::PI * 2.0).sin().abs() * 255.0) as u8);
-            }
-
-            controller.feedback(feedback);
         }
 
         if self.elapsed >= Duration::from_secs(10) {
-            return Box::new(Lobby::new(world.controllers));
+            return Box::new(Lobby::new(world.players));
         }
 
         return self;

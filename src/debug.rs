@@ -6,7 +6,7 @@ use scarlet::colorpoint::ColorPoint;
 use crate::engine::sound::Playback;
 use crate::engine::state::{State, World};
 use crate::lobby::Lobby;
-use crate::psmove::{Battery, Feedback};
+use crate::psmove::Battery;
 
 pub struct Debug {
     music: Playback,
@@ -46,41 +46,37 @@ impl Debug {
 
 impl State for Debug {
     fn update(mut self: Box<Self>, world: &mut World, _: Duration) -> Box<dyn State> {
-        let triangle = world.controllers.iter()
-            .any(|controller| controller.input().buttons.triangle);
+        let triangle = world.players.iter()
+            .any(|player| player.input().buttons.triangle);
 
-        for controller in world.controllers.iter_mut() {
-            let mut feedback = Feedback::new();
-
+        for player in world.players.iter_mut() {
             if triangle {
-                feedback = feedback.led_color(Self::COLOR_WHITE);
-            } else if controller.input().buttons.circle {
-                feedback = feedback.led_color(battery_to_color(controller.battery()));
+                player.color.set(Self::COLOR_WHITE);
+            } else if player.input().buttons.circle {
+                player.color.set(battery_to_color(player.battery()));
             } else {
-                feedback = feedback.led_color(vector_to_color(controller.input().accelerometer));
+                player.color.set(vector_to_color(player.input().accelerometer));
             }
 
-            if controller.input().buttons.swoosh {
-                feedback = feedback.rumble((controller.input().buttons.trigger.1 * 255.0) as u8);
+            if player.input().buttons.swoosh {
+                player.rumble.set((player.input().buttons.trigger.1 * 255.0) as u8);
             }
 
-            if controller.input().buttons.select {
+            if player.input().buttons.select {
                 self.music = world.sound.music(world.assets.music.random());
             }
-
-            controller.feedback(feedback);
         }
 
-        if world.controllers.iter()
-            .any(|controller| controller.input().buttons.start || controller.input().buttons.cross) {
-            return Box::new(Lobby::new(world.controllers));
+        if world.players.iter()
+            .any(|player| player.input().buttons.start || player.input().buttons.cross) {
+            return Box::new(Lobby::new(world.players));
         }
 
-        if let Some(controller) = world.controllers.iter().next() {
-            let speed = if controller.input().buttons.square {
-                controller.input().buttons.trigger.1 * 1.5
+        if let Some(player) = world.players.iter().next() {
+            let speed = if player.input().buttons.square {
+                player.input().buttons.trigger.1 * 1.5
             } else {
-                controller.input().buttons.trigger.1 * -1.5
+                player.input().buttons.trigger.1 * -1.5
             };
 
             self.music.speed(speed);

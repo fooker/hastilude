@@ -7,13 +7,13 @@ use rand::Rng;
 use scarlet::color::{Color, RGBColor};
 use scarlet::colors::HSVColor;
 
-use crate::engine::animation::Fader;
-use crate::engine::players::{ControllerId, PlayerData};
+use crate::engine::animation::{Animated, interpolations, Keyframe};
+use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::sound::Playback;
 use crate::engine::state::{State, World};
 use crate::games::Game;
 use crate::games::meta::{PlayerColor, Winner};
-use crate::psmove::Feedback;
+use crate::keyframes;
 
 pub struct Player {
     alive: bool,
@@ -67,9 +67,9 @@ pub struct Joust {
     speed: (Speed, Instant),
 
     music: Playback,
-    music_speed: Fader,
+    music_speed: Animated<f32>,
 
-    threshold: Fader,
+    threshold: Animated<f32>,
 }
 
 impl Joust {
@@ -101,7 +101,12 @@ impl State for Joust {
                 Speed::SLOW => Speed::NORMAL,
             };
 
-            self.music_speed.set(speed.music());
+            self.music_speed.animate([
+                Keyframe { duration: Self::CHANGE_SPEED_MUSIC, value: speed.music(), interpolation: interpolations::elastic_in_out }
+            ]);
+            self.threshold.animate([
+                Keyframe { duration: Self::CHANGE_SPEED_THRESHOLD, value: speed.threshold(), interpolation: interpolations::linear }
+            ]);
 
             self.speed = (speed, world.now + duration);
         }
@@ -109,30 +114,37 @@ impl State for Joust {
         // Update music speed
         self.music.speed(self.music_speed.value());
 
-        // Update players
-        for (controller, data) in world.controllers.with_data(&mut self.data)
-            .existing() {
-            let mut feedback = Feedback::new();
+        // Calculating alive players
+        let alive = self.data.iter()
+            .filter_map(|(id, data)| if data.alive { Some(data) } else { None })
+            .collect::<Vec<_>>();
 
+
+        // Update players
+        for (player, data) in world.players.with_data(&mut self.data)
+            .existing() {
             if data.alive {
-                data.accel.write((1.0 - controller.input().accelerometer.magnitude()).abs());
+                data.accel.write((1.0 - player.input().accelerometer.magnitude()).abs());
                 let accel = data.accel.iter().sum::<f32>() / data.accel.len() as f32;
                 let accel = accel / self.threshold.value();
 
-                if dbg!(accel) >= 1.0 {
-                    // TODO: Buzz loosing player
+                if accel >= 1.0 {
                     data.alive = false;
-                    feedback = feedback.led_off();
+
+                    player.color.set(RGBColor { r: 0.0, g: 0.0, b: 0.0 });
+                    player.rumble.animate(keyframes![
+                        0.0 => 255,
+                        1.0 => 0 @ linear,
+                    ]);
                 } else {
-                    feedback = feedback.led_color(HSVColor {
+                    // TODO: Slowly move color around and re-balance if player is out
+                    player.color.set(HSVColor {
                         h: data.hue,
                         s: 1.0,
                         v: 1.0 - f32::sqrt(accel) as f64,
                     }.convert::<RGBColor>());
                 }
             }
-
-            controller.feedback(feedback);
         }
 
         // Check if at least one player is alive
@@ -141,7 +153,7 @@ impl State for Joust {
             .collect::<HashSet<_>>();
 
         if alive.len() <= 1 {
-            return Box::new(Winner::new(alive));
+            return Box::new(Winner::new(alive, world));
         }
 
         return self;
@@ -151,13 +163,13 @@ impl State for Joust {
 impl Game for Joust {
     type Data = Player;
 
-    fn create(players: HashSet<ControllerId>, world: &mut World) -> Self {
+    fn create(players: HashSet<PlayerId>, world: &mut World) -> Self {
         let music = world.assets.music.random();
         let music = world.sound.music(music);
 
         // Create players and assign colors
         let hue_base: f64 = rand::random();
-        let hue_step: f64 = 1.0 / world.controllers.count() as f64;
+        let hue_step: f64 = 1.0 / world.players.count() as f64;
 
         let players = PlayerData::init_with(players.into_iter()
             .enumerate()
@@ -172,8 +184,8 @@ impl Game for Joust {
             data: players,
             speed: (Speed::NORMAL, Instant::now()),
             music,
-            music_speed: Fader::new(Speed::NORMAL.music(), Self::CHANGE_SPEED_MUSIC),
-            threshold: Fader::new(Speed::NORMAL.threshold(), Self::CHANGE_SPEED_THRESHOLD),
+            music_speed: Animated::idle(Speed::NORMAL.music()),
+            threshold: Animated::idle(Speed::NORMAL.threshold()),
         };
     }
 

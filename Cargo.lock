@@ -388,6 +388,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "easings"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6b671ae6e952cac23e817bd222705c8b1d242951cca4511cb356371e8f469b0"
+
+[[package]]
 name = "embedded-hal"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -561,10 +567,10 @@ dependencies = [
  "anyhow",
  "async-trait",
  "cgmath",
+ "easings",
  "futures",
  "heapless",
  "nix 0.23.1",
- "num-traits",
  "packed_struct",
  "rand",
  "replace_with",

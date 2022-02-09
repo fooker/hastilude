@@ -1,19 +1,22 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::engine::players::{ControllerId, Controllers};
+use scarlet::color::RGBColor;
+
+use crate::engine::players::{PlayerId, Players};
 use crate::engine::state::{State, World};
-use crate::psmove::Feedback;
+use crate::keyframes;
 
 pub struct Lobby {
-    ready: HashSet<ControllerId>,
+    ready: HashSet<PlayerId>,
 }
 
 impl Lobby {
-    pub fn new(controllers: &mut Controllers) -> Self {
+    pub fn new(players: &mut Players) -> Self {
         // Reset all controllers
-        for controller in controllers.iter_mut() {
-            controller.feedback(Feedback::new());
+        for player in players.iter_mut() {
+            player.color.set(RGBColor { r: 0.0, g: 0.0, b: 0.0 });
+            player.rumble.set(0);
         }
 
         return Self {
@@ -28,33 +31,31 @@ impl State for Lobby {
         // is ready. By this they will become ready themself.
         let mut start = false;
 
-        for controller in world.controllers.iter_mut() {
-            let mut feedback = Feedback::new();
+        for player in world.players.iter_mut() {
+            if !self.ready.contains(&player.id()) && player.input().buttons.trigger.0 {
+                self.ready.insert(player.id());
 
-            if !self.ready.contains(&controller.id()) && controller.input().buttons.trigger.0 {
-                self.ready.insert(controller.id());
-
-                // TODO: Make animation
-                feedback = feedback.rumble(64);
+                player.rumble.animate(keyframes![
+                    0.00 => 64,
+                    0.05 => 0,
+                ]);
             }
 
-            if self.ready.len() > 1 && controller.input().buttons.start {
-                self.ready.insert(controller.id());
+            if self.ready.len() > 1 && player.input().buttons.start {
+                self.ready.insert(player.id());
                 start = true;
             }
 
-            if controller.input().buttons.circle {
-                feedback = feedback.led_color(super::debug::battery_to_color(controller.battery()));
-            } else if self.ready.contains(&controller.id()) {
-                feedback = feedback.led_color((0xff, 0xff, 0xff));
+            if player.input().buttons.circle {
+                player.color.set(super::debug::battery_to_color(player.battery()));
+            } else if self.ready.contains(&player.id()) {
+                player.color.set(RGBColor { r: 1.0, g: 1.0, b: 1.0 });
             } else {
-                feedback = feedback.led_off();
+                player.color.set(RGBColor { r: 0.0, g: 0.0, b: 0.0 });
             }
-
-            controller.feedback(feedback);
         }
 
-        if self.ready.len() >= world.controllers.count() || start {
+        if self.ready.len() >= world.players.count() || start {
             // Collect players and reset ready list for next game
             let players = std::mem::take(&mut self.ready);
 
