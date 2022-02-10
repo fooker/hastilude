@@ -74,7 +74,7 @@ impl<V> Keyframe<V> {
 
 #[macro_export]
 macro_rules! keyframe {
-    ($duration:literal => ($value:expr) @ $interpolation:ident) => {
+    ($duration:literal => { $value:expr } @ $interpolation:ident) => {
         (($duration, $value, $crate::engine::animation::interpolations::$interpolation as $crate::engine::animation::Interpolation).into())
     };
 }
@@ -87,20 +87,20 @@ macro_rules! keyframes {
         $crate::keyframes!(@expr [ $($body)* ])
     };
 
-    (@rec [ $duration:literal => ($value:expr) @ $interpolation:ident, $($r:tt)* ] -> ($($body:tt)*)) => {
-        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => ($value) @ $interpolation),))
+    (@rec [ $duration:literal => { $value:expr } @ $interpolation:ident, $($r:tt)* ] -> ($($body:tt)*)) => {
+        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ $interpolation),))
     };
 
     (@rec [ $duration:literal => $value:literal @ $interpolation:ident, $($r:tt)* ] -> ($($body:tt)*)) => {
-        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => ($value) @ $interpolation),))
+        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ $interpolation),))
     };
 
-    (@rec [ $duration:literal => ($value:expr), $($r:tt)* ] -> ($($body:tt)*)) => {
-        $crate::keyframes!(@rec { $($r)* } -> ($($body)* $crate::keyframe!($duration => ($value) @ end),))
+    (@rec [ $duration:literal => { $value:expr }, $($r:tt)* ] -> ($($body:tt)*)) => {
+        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ end),))
     };
 
     (@rec [ $duration:literal => $value:literal, $($r:tt)* ] -> ($($body:tt)*)) => {
-        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => ($value) @ end),))
+        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ end),))
     };
 
     ($($frame:tt)*) => {
@@ -130,10 +130,10 @@ impl<V> Animated<V>
     where
         V: Lerp + Copy,
 {
-    pub fn idle(value: V) -> Self {
+    pub fn idle(value: impl Into<V>) -> Self {
         return Self {
             state: State::Idle,
-            value,
+            value: value.into(),
         };
     }
 
@@ -163,19 +163,18 @@ impl<V> Animated<V>
 
     pub fn update(&mut self, duration: Duration) {
         if let State::Running { ref mut elapsed, ref mut timeline } = self.state {
-            let mut duration = duration;
+            // Continue in time
+            *elapsed += duration;
+
             while let Some(keyframe) = timeline.front() {
-                if *elapsed + duration > keyframe.duration {
-                    // This update will complete the current keyframe
+                if *elapsed >= keyframe.duration {
+                    // The current keyframe has completed
                     self.value = keyframe.value;
 
-                    duration -= keyframe.duration - *elapsed;
-                    *elapsed = Duration::ZERO;
-
+                    *elapsed -= keyframe.duration;
                     timeline.pop_front();
                 } else {
-                    // Continue processing the current keyframe
-                    *elapsed += duration;
+                    // Stay in the current frame
                     break;
                 }
             }
@@ -203,6 +202,13 @@ impl<V> Animated<V>
             }
         };
     }
+
+    pub fn is_idle(&self) -> bool {
+        return match self.state {
+            State::Idle => true,
+            State::Running { .. } => false,
+        };
+    }
 }
 
 impl Lerp for u8 {
@@ -210,7 +216,7 @@ impl Lerp for u8 {
         if a < b {
             return a + ((b - a) as f64 * i) as u8;
         } else {
-            return b + ((a - b) as f64 * i) as u8;
+            return a - ((a - b) as f64 * i) as u8;
         }
     }
 }
@@ -223,7 +229,7 @@ impl Lerp for f32 {
 
 impl Lerp for RGBColor {
     fn lerp(a: Self, b: Self, i: f64) -> Self {
-        return RGBColor::weighted_midpoint(a, b, i);
+        return RGBColor::weighted_midpoint(b, a, i);
     }
 }
 
@@ -232,5 +238,57 @@ pub mod interpolations {
 
     pub fn end(i: f64) -> f64 {
         if i < 1.0 { 0.0 } else { 1.0 }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_idle_value() {
+        let animation: Animated<u8> = Animated::idle(7);
+        assert!(animation.is_idle());
+        assert_eq!(animation.value(), 7);
+    }
+
+    #[test]
+    fn test_animation_value() {
+        let mut animation: Animated<u8> = Animated::idle(7);
+        assert_eq!(animation.value(), 7);
+
+        animation.animate(keyframes!(
+            1.0 => 9 @ linear,
+            2.0 => 8 @ end,
+            3.0 => 5 @ linear,
+        ));
+
+        assert!(!animation.is_idle());
+
+        assert_eq!(animation.value(), 7);
+
+        // 1. Frame: 1.0 => 9 @ linear
+        animation.update(Duration::from_millis(500));
+        assert_eq!(animation.value(), 8);
+        animation.update(Duration::from_millis(500));
+        assert_eq!(animation.value(), 9);
+
+        // 2. Frame: 2.0 => 8 @ end
+        animation.update(Duration::from_millis(1500));
+        assert_eq!(animation.value(), 9);
+        animation.update(Duration::from_millis(400));
+        assert_eq!(animation.value(), 9);
+        animation.update(Duration::from_millis(100));
+        assert_eq!(animation.value(), 8);
+
+        // 3. Frame: 3.0 => 4 @ linear
+        animation.update(Duration::from_millis(1000));
+        assert_eq!(animation.value(), 7);
+        animation.update(Duration::from_millis(1000));
+        assert_eq!(animation.value(), 6);
+        animation.update(Duration::from_millis(1000));
+        assert_eq!(animation.value(), 5);
+
+        assert!(animation.is_idle());
     }
 }

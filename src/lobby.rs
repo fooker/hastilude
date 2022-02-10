@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use scarlet::color::RGBColor;
+use tracing::debug;
 
 use crate::engine::players::{PlayerId, Players};
 use crate::engine::state::{State, World};
@@ -35,15 +36,18 @@ impl State for Lobby {
             if !self.ready.contains(&player.id()) && player.input().buttons.trigger.0 {
                 self.ready.insert(player.id());
 
+                debug!("Player {} ready ({})", player.id(), self.ready.len());
+
                 player.rumble.animate(keyframes![
                     0.00 => 64,
                     0.05 => 0,
                 ]);
             }
 
-            if self.ready.len() > 1 && player.input().buttons.start {
+            if self.ready.len() >= 2 && player.input().buttons.start {
                 self.ready.insert(player.id());
                 start = true;
+                debug!("Starting on player {} request", player.id());
             }
 
             if player.input().buttons.circle {
@@ -55,10 +59,16 @@ impl State for Lobby {
             }
         }
 
-        if self.ready.len() >= world.players.count() || start {
+        if self.ready.len() >= 2 && self.ready.len() >= world.players.count() {
+            debug!("Starting as all players are ready");
+            start = true;
+        }
+
+        if start {
             // Collect players and reset ready list for next game
             let players = std::mem::take(&mut self.ready);
 
+            debug!("Starting game {:?}", world.game);
             let game = world.game.create(players, world);
 
             return game;

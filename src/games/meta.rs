@@ -1,9 +1,9 @@
 use std::collections::HashSet;
-use std::ops::Range;
 use std::time::Duration;
 
 use scarlet::color::{Color, RGBColor};
 use scarlet::colors::HSVColor;
+use tracing::debug;
 
 use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::state::{State, World};
@@ -29,21 +29,29 @@ impl<T> Countdown<T>
         T: Game,
         T::Data: PlayerColor,
 {
-    const PHASE: Duration = Duration::from_millis(750);
-    const LIGHT: Duration = Duration::from_millis(150);
-
-    const STEPS: [Range<Duration>; 3] = [
-        (Self::PHASE.saturating_mul(1)..Self::PHASE.saturating_mul(1).saturating_add(Self::LIGHT)),
-        (Self::PHASE.saturating_mul(2)..Self::PHASE.saturating_mul(2).saturating_add(Self::LIGHT)),
-        (Self::PHASE.saturating_mul(3)..Self::PHASE.saturating_mul(3).saturating_add(Self::LIGHT)),
-    ];
-
     pub fn new(mut game: T, world: &mut World) -> Self {
+        debug!("Start countdown");
+
         // Short initial buzz for all players
-        for (player, _) in world.players.with_data(game.data()).existing() {
+        for (player, data) in world.players.with_data(game.data()).existing() {
             player.rumble.animate(keyframes![
                 0.0 => 127,
                 0.1 => 0,
+            ]);
+
+            player.color.animate(keyframes![
+                0.0 => { (0, 0, 0) },
+
+                0.75 => { data.color() } @ end,
+
+                0.10 => { (0, 0, 0) } @ linear,
+                0.65 => { data.color() } @ end,
+
+                0.20 => { (0, 0, 0) } @ linear,
+                0.55 => { data.color() } @ end,
+
+                0.30 => { (0, 0, 0) } @ linear,
+                0.45 => { data.color() } @ end,
             ]);
         }
 
@@ -59,18 +67,11 @@ impl<T> State for Countdown<T>
         T: Game,
         T::Data: PlayerColor,
 {
-    fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> Box<dyn State> {
+    fn update(mut self: Box<Self>, _: &mut World, duration: Duration) -> Box<dyn State> {
         self.elapsed += duration;
 
-        for (player, data) in world.players.with_data(self.game.data()).existing() {
-            if Self::STEPS[0].contains(&self.elapsed) ||
-                Self::STEPS[1].contains(&self.elapsed) ||
-                Self::STEPS[2].contains(&self.elapsed) {
-                player.color.set(data.color());
-            }
-        }
-
-        if self.elapsed >= Self::PHASE * 4 {
+        if self.elapsed >= Duration::from_secs(3) {
+            debug!("Countdown finished - start game");
             return Box::new(self.game);
         }
 
@@ -85,21 +86,23 @@ pub struct Winner {
 
 impl Winner {
     pub fn new(winners: HashSet<PlayerId>, world: &mut World) -> Self {
+        debug!("Celebrating winners: {:?}", winners);
+
         let mut winners = PlayerData::init(winners, || ());
 
         for (player, _) in world.players.with_data(&mut winners).existing() {
             player.rumble.animate(keyframes![
-                0.4 => 0   @ quadratic_in_out,
-                0.1 => 200 @ quadratic_in_out,
-                0.1 => 0   @ quadratic_in_out,
+                0.0 => 0   @ quadratic_in_out,
+                0.8 => 200 @ quadratic_in_out,
+                0.2 => 0   @ quadratic_in_out,
 
-                0.4 => 0   @ quadratic_in_out,
-                0.1 => 200 @ quadratic_in_out,
-                0.1 => 0   @ quadratic_in_out,
+                0.5 => 0   @ quadratic_in_out,
+                0.8 => 200 @ quadratic_in_out,
+                0.2 => 0   @ quadratic_in_out,
 
-                0.4 => 0   @ quadratic_in_out,
-                0.4 => 200 @ quadratic_in_out,
-                0.4 => 0   @ quadratic_in_out,
+                0.5 => 0   @ quadratic_in_out,
+                0.8 => 200 @ quadratic_in_out,
+                0.2 => 0   @ quadratic_in_out,
             ]);
         }
 
@@ -126,6 +129,7 @@ impl State for Winner {
         }
 
         if self.elapsed >= Duration::from_secs(10) {
+            debug!("Enough partying - back to lobby");
             return Box::new(Lobby::new(world.players));
         }
 

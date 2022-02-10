@@ -1,16 +1,15 @@
 use std::collections::{hash_map, HashMap, HashSet};
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::Result;
-use futures::{Stream, StreamExt, task::Poll};
+use futures::{StreamExt, task::Poll};
 use scarlet::color::RGBColor;
 use tokio::time::timeout;
 use tracing::{debug, instrument};
 
+use crate::controller::{Battery, Controller, Feedback, hid, Input};
 use crate::engine::animation::Animated;
-use crate::controller::{hid, Battery, Controller, Feedback, Input};
 
 pub type PlayerId = u64;
 
@@ -43,9 +42,10 @@ impl Player {
     #[instrument(level = "trace", skip(self), fields(id = self.id()))]
     async fn update(&mut self, duration: Duration) -> Result<()> {
         self.rumble.update(duration);
+        self.color.update(duration);
 
         self.controller.feedback(Feedback {
-            rgb: (0, 0, 0),
+            rgb: self.color.value().int_rgb_tup(),
             rumble: self.rumble.value(),
         });
 

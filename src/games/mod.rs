@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 
-use crate::engine::players::{PlayerId, PlayerData};
+use tracing::debug;
+
+use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::state::{State, World};
 use crate::games::meta::{Countdown, PlayerColor};
 
@@ -27,6 +29,8 @@ fn start<T>(players: HashSet<PlayerId>, world: &mut World) -> impl State
     where T: Game,
           T::Data: PlayerColor {
     let game = T::create(players, world);
+    debug!("Game created");
+
     return Countdown::new(game, world);
 }
 
