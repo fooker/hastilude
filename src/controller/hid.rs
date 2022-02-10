@@ -3,12 +3,16 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use anyhow::{anyhow, Result};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use tokio::io::unix::AsyncFd;
 use udev::EventType;
 
 const BUS_USB: u8 = 0x03;
 const BUS_BLUETOOTH: u8 = 0x05;
+
+const PSMOVE_VID: u16 = 0x054c;
+const PSMOVE_PS3_PID: u16 = 0x03d5;
+const PSMOVE_PS4_PID: u16 = 0x0c5e;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Bus {
@@ -19,15 +23,15 @@ pub enum Bus {
 
 #[derive(Debug)]
 pub struct Device {
-    path: PathBuf,
+    pub path: PathBuf,
 
-    bus: Bus,
+    pub bus: Bus,
 
-    vendor_id: u16,
-    product_id: u16,
+    pub vendor_id: u16,
+    pub product_id: u16,
 
-    address: String,
-    controller: String,
+    pub address: String,
+    pub controller: String,
 }
 
 #[derive(Debug)]
@@ -36,22 +40,34 @@ pub enum Event {
     Removed(PathBuf),
 }
 
-pub fn monitor() -> Result<impl Stream<Item=Result<Event>> + Unpin> {
+pub type Events = impl Stream<Item=Result<Event>>;
+
+fn is_controller(device: &Device) -> bool {
+    return device.vendor_id == PSMOVE_VID && (device.product_id == PSMOVE_PS3_PID || device.product_id == PSMOVE_PS4_PID);
+}
+
+pub fn monitor() -> Result<(Vec<Device>, Events)> {
     let mut enumerator = udev::Enumerator::new()?;
     enumerator.match_subsystem("hidraw")?;
     let devices = enumerator.scan_devices()?;
 
-    let devices = futures::stream::iter(devices.map(Ok).collect::<Vec<_>>())
-        .try_filter_map(|event| async move {
-            let path = if let Some(path) = event.devnode() {
+    let initial = devices
+        .map(|device| {
+            let path = if let Some(path) = device.devnode() {
                 path.to_path_buf()
             } else {
                 return Ok(None);
             };
 
-            let device = self::device(path, &event)?;
-            return Ok(Some(Event::Added(device)));
-        });
+            let device = self::device(path, &device)?;
+
+            if !is_controller(&device) {
+                return Ok(None);
+            }
+
+            return Ok(Some(device));
+        }).filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
 
     let monitor = Monitor::new()?
         .try_filter_map(|event| async move {
@@ -64,10 +80,16 @@ pub fn monitor() -> Result<impl Stream<Item=Result<Event>> + Unpin> {
             match event.event_type() {
                 EventType::Add => {
                     let device = self::device(path, &event)?;
+
+                    if !is_controller(&device) {
+                        return Ok(None);
+                    }
+
                     return Ok(Some(Event::Added(device)));
                 }
 
                 EventType::Remove => {
+                    dump(&event);
                     return Ok(Some(Event::Removed(path)));
                 }
 
@@ -77,7 +99,7 @@ pub fn monitor() -> Result<impl Stream<Item=Result<Event>> + Unpin> {
             }
         });
 
-    return Ok(devices.chain(monitor));
+    return Ok((initial, Box::pin(monitor)));
 }
 
 struct Monitor {
@@ -150,14 +172,19 @@ impl Stream for Monitor {
     type Item = Result<udev::Event>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        match self.fd.poll_read_ready(cx) {
+        match self.fd.poll_read_ready_mut(cx) {
             Poll::Ready(Ok(mut ready_guard)) => {
                 ready_guard.clear_ready();
-                Poll::Ready(ready_guard.get_ref().get_mut().next().map(Ok))
+                return Poll::Ready(ready_guard.get_inner_mut().next().map(Ok));
             }
 
-            Poll::Ready(Err(err)) => Poll::Ready(Some(Err(err.into()))),
-            Poll::Pending => Poll::Pending,
+            Poll::Ready(Err(err)) => {
+                return Poll::Ready(Some(Err(err.into())));
+            }
+
+            Poll::Pending => {
+                return Poll::Pending;
+            }
         }
     }
 }

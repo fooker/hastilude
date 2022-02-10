@@ -1,17 +1,23 @@
 use std::collections::{hash_map, HashMap, HashSet};
+use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::Duration;
 
 use anyhow::Result;
+use futures::{Stream, StreamExt, task::Poll};
 use scarlet::color::RGBColor;
 use tokio::time::timeout;
+use tracing::{debug, instrument};
 
 use crate::engine::animation::Animated;
-use crate::psmove::{Battery, Controller, Feedback, Input};
+use crate::controller::{hid, Battery, Controller, Feedback, Input};
 
 pub type PlayerId = u64;
 
 pub struct Players {
-    players: HashMap<PlayerId, Player>,
+    players: HashMap<PathBuf, Player>,
+
+    events: hid::Events,
 }
 
 pub struct Player {
@@ -34,6 +40,7 @@ impl Player {
         return self.controller.battery();
     }
 
+    #[instrument(level = "trace", skip(self), fields(id = self.id()))]
     async fn update(&mut self, duration: Duration) -> Result<()> {
         self.rumble.update(duration);
 
@@ -49,25 +56,40 @@ impl Player {
 impl Players {
     const TIMEOUT: Duration = Duration::from_millis(10);
 
+    #[instrument(level = "debug")]
     pub async fn init() -> Result<Self> {
-        return Ok(Self {
+        let (devices, events) = hid::monitor()?;
+
+        let mut players = Self {
             players: HashMap::new(),
-        });
+            events,
+        };
+
+        // Process all initial devices
+        for device in devices {
+            players.add_device(device).await?;
+        }
+
+        return Ok(players);
     }
 
-    pub fn register(&mut self, controller: Controller) {
-        self.players.insert(controller.id(), Player {
-            controller,
-            rumble: Animated::idle(0),
-            color: Animated::idle(RGBColor { r: 0.0, g: 0.0, b: 0.0 }),
-        });
-    }
-
-    pub async fn reinit(&mut self) -> Result<()> {
-        return Ok(());
-    }
-
+    #[instrument(level = "trace", skip(self))]
     pub async fn update(&mut self, duration: Duration) -> Result<()> {
+        // We limit this to a single event on each update cycle
+        if let Poll::Ready(Some(event)) = futures::poll(self.events.next()).await {
+            match event? {
+                hid::Event::Added(device) => {
+                    self.add_device(device).await?;
+                }
+
+                hid::Event::Removed(path) => {
+                    debug!("Removed controller: {:?}", &path);
+
+                    self.players.remove(&path);
+                }
+            };
+        }
+
         // TODO: Check and handle (log, retry, circuit-break) timeouts
 
         let updates = self.iter_mut()
@@ -95,6 +117,19 @@ impl Players {
             iter: self.players.values_mut(),
             data,
         };
+    }
+
+    async fn add_device(&mut self, device: hid::Device) -> Result<()> {
+        debug!("Added controller: {:?}", device.path);
+
+        let controller = Controller::new(&device.path).await?;
+        self.players.insert(device.path, Player {
+            controller,
+            rumble: Animated::idle(0),
+            color: Animated::idle(RGBColor { r: 0.0, g: 0.0, b: 0.0 }),
+        });
+
+        return Ok(());
     }
 }
 
@@ -139,7 +174,7 @@ impl<D> PlayerData<D> {
 }
 
 pub struct WithData<'a, D> {
-    iter: hash_map::ValuesMut<'a, PlayerId, Player>,
+    iter: hash_map::ValuesMut<'a, PathBuf, Player>,
     data: &'a mut PlayerData<D>,
 }
 
@@ -179,7 +214,7 @@ impl<'a, D> Iterator for WithData<'a, D> {
 }
 
 pub struct WithDefaultData<'a, D, F> {
-    iter: hash_map::ValuesMut<'a, PlayerId, Player>,
+    iter: hash_map::ValuesMut<'a, PathBuf, Player>,
     data: &'a mut PlayerData<D>,
     default: F,
 }

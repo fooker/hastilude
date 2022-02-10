@@ -1,4 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
+use std::hash::Hasher;
 use std::ops::Deref;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -6,10 +7,10 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use cgmath::{ElementWise, Zero};
 use tokio::fs::{File, OpenOptions};
+use tracing::instrument;
 
-use crate::psmove::proto::{Address, Get, Set};
-use crate::psmove::proto::zcm1::{GetAddress, GetCalibration, GetCalibrationInner, GetInput, SetLED};
-use std::hash::Hasher;
+use crate::controller::proto::{Address, Get, Set};
+use crate::controller::proto::zcm1::{GetAddress, GetCalibration, GetCalibrationInner, GetInput, SetLED};
 
 mod proto;
 pub mod hid;
@@ -250,6 +251,7 @@ impl Controller {
         return hasher.finish();
     }
 
+    #[instrument(level="trace", skip(self))]
     pub async fn update(&mut self) -> Result<()> {
         // Send updates if required
         if let Some(feedback) = self.feedback.update() {

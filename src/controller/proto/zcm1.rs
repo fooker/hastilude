@@ -1,8 +1,8 @@
 use anyhow::Result;
 use packed_struct::prelude::{Integer, packed_bits, PackedStruct};
 
-use crate::psmove::Feedback;
-use crate::psmove::proto::{Address, Feature, Get, Primary, Set};
+use crate::controller::Feedback;
+use crate::controller::proto::{Address, Feature, Get, Primary, Set};
 
 use super::Report;
 

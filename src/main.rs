@@ -1,3 +1,5 @@
+#![feature(type_alias_impl_trait)]
+
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -9,9 +11,8 @@ use crate::engine::sound::Sound;
 use crate::engine::state::{StateMachine, World};
 use crate::games::GameType;
 use crate::lobby::Lobby;
-use crate::psmove::Controller;
 
-pub mod psmove;
+pub mod controller;
 pub mod engine;
 pub mod games;
 pub mod lobby;
@@ -20,26 +21,14 @@ pub mod debug;
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_max_level(Level::TRACE)
+        .with_max_level(Level::DEBUG)
         .with_ansi(true)
-        .pretty()
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::ACTIVE)
+        .compact()
         .init();
 
     let mut players = Players::init().await
         .context("Failed to initialize players")?;
-
-    players.register(Controller::new("/dev/hidraw13").await?);
-    players.register(Controller::new("/dev/hidraw14").await?);
-
-    // let mut monitor = psmove::hid::Monitor::new()?;
-    //
-    // while let Some(event) = monitor.update()? {
-    //     println!("Event: {:?}", event);
-    // }
-    //
-    // for dev in monitor.devices() {
-    //     println!("Device: {:?}", dev);
-    // }
 
     let mut sound = Sound::init()
         .context("Failed to initialize sound")?;

@@ -171,6 +171,8 @@ impl<V> Animated<V>
 
                     duration -= keyframe.duration - *elapsed;
                     *elapsed = Duration::ZERO;
+
+                    timeline.pop_front();
                 } else {
                     // Continue processing the current keyframe
                     *elapsed += duration;
@@ -205,7 +207,11 @@ impl<V> Animated<V>
 
 impl Lerp for u8 {
     fn lerp(a: Self, b: Self, i: f64) -> Self {
-        return a + ((b - a) as f64 * i) as u8;
+        if a < b {
+            return a + ((b - a) as f64 * i) as u8;
+        } else {
+            return b + ((a - b) as f64 * i) as u8;
+        }
     }
 }
 

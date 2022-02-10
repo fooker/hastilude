@@ -6,7 +6,7 @@ use scarlet::colorpoint::ColorPoint;
 use crate::engine::sound::Playback;
 use crate::engine::state::{State, World};
 use crate::lobby::Lobby;
-use crate::psmove::Battery;
+use crate::controller::Battery;
 
 pub struct Debug {
     music: Playback,

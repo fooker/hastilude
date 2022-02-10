@@ -7,8 +7,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Source};
-use crate::engine::assets::{AssetLoader, Asset};
+use tracing::instrument;
 
+use crate::engine::assets::{Asset, AssetLoader};
 
 struct DynamicSource<I> {
     input: I,
@@ -130,6 +131,7 @@ impl AssetLoader for Music {
 }
 
 impl Sound {
+    #[instrument(level = "debug")]
     pub fn init() -> Result<Self> {
         let (output, handle) = OutputStream::try_default()
             .context("Failed to open default sound output stream")?;
@@ -140,6 +142,7 @@ impl Sound {
         });
     }
 
+    #[instrument(level = "debug", skip(self))]
     pub fn music(&self, asset: &Asset<Music>) -> Playback {
         let source = asset
             .load()

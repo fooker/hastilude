@@ -1,11 +1,13 @@
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
+use std::fmt;
 
 use anyhow::{anyhow, Context, Result};
 use rand::seq::SliceRandom;
-use tracing::trace_span;
+use tracing::{trace_span,instrument};
 
 use crate::engine::sound::Music;
+use std::fmt::Debug;
 
 pub trait AssetLoader: Sized {
     type Asset;
@@ -29,12 +31,23 @@ impl<L: AssetLoader> Asset<L> {
     }
 }
 
+impl<L: AssetLoader> fmt::Debug for Asset<L> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Asset")
+            .field("name", &self.name)
+            .field("path", &self.path)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 pub struct AssetBundle<L: AssetLoader> {
     assets: Vec<Asset<L>>,
 }
 
 impl<L: AssetLoader> AssetBundle<L> {
-    pub(self) fn load(path: impl AsRef<Path>) -> Result<Self> {
+    #[instrument(level = "debug")]
+    pub(self) fn load(path: impl AsRef<Path> + Debug) -> Result<Self> {
         let assets = path.as_ref().read_dir()
             .with_context(|| format!("Failed to open asset directory: {:?}", path.as_ref()))?
             .map(|entry| {
@@ -76,7 +89,8 @@ pub struct Assets {
 }
 
 impl Assets {
-    pub fn init(path: impl AsRef<Path>) -> Result<Self> {
+    #[instrument(level = "debug")]
+    pub fn init(path: impl AsRef<Path> + Debug) -> Result<Self> {
         let music = AssetBundle::load(path.as_ref().join("music"))
             .context("Failed to load music assets")?;
 

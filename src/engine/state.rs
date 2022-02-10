@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use replace_with::replace_with_or_abort;
+use tracing::instrument;
 
 use crate::engine::assets::Assets;
 use crate::engine::players::Players;
@@ -39,6 +40,7 @@ impl StateMachine {
         };
     }
 
+    #[instrument(level = "trace", skip(self, world))]
     pub fn update(&mut self, world: &mut World, duration: Duration) {
         replace_with_or_abort(&mut self.state, |state| state.update(world, duration));
     }
