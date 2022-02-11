@@ -10,6 +10,7 @@ pub trait Lerp {
     fn lerp(a: Self, b: Self, i: f64) -> Self;
 }
 
+#[derive(Debug, Clone)]
 pub struct Keyframe<V> {
     pub duration: Duration,
     pub value: V,
@@ -74,8 +75,24 @@ impl<V> Keyframe<V> {
 
 #[macro_export]
 macro_rules! keyframe {
-    ($duration:literal => { $value:expr } @ $interpolation:ident) => {
+    (@ $duration:expr => { $value:expr } @ $interpolation:ident) => {
         (($duration, $value, $crate::engine::animation::interpolations::$interpolation as $crate::engine::animation::Interpolation).into())
+    };
+
+    ($duration:expr => { $value:expr } @ $interpolation:ident) => {
+        $crate::keyframe!(@ $duration => { $value } @ $interpolation)
+    };
+
+    ($duration:expr => $value:literal @ $interpolation:ident) => {
+        $crate::keyframe!(@ $duration => { $value } @ $interpolation)
+    };
+
+    ($duration:expr => { $value:expr }) => {
+        $crate::keyframe!(@ $duration => { $value } @ end)
+    };
+
+    ($duration:expr => $value:literal) => {
+        $crate::keyframe!(@ $duration => { $value } @ end)
     };
 }
 
@@ -87,20 +104,20 @@ macro_rules! keyframes {
         $crate::keyframes!(@expr [ $($body)* ])
     };
 
-    (@rec [ $duration:literal => { $value:expr } @ $interpolation:ident, $($r:tt)* ] -> ($($body:tt)*)) => {
+    (@rec [ $duration:expr => { $value:expr } @ $interpolation:ident, $($r:tt)* ] -> ($($body:tt)*)) => {
         $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ $interpolation),))
     };
 
-    (@rec [ $duration:literal => $value:literal @ $interpolation:ident, $($r:tt)* ] -> ($($body:tt)*)) => {
-        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ $interpolation),))
+    (@rec [ $duration:expr => $value:literal @ $interpolation:ident, $($r:tt)* ] -> ($($body:tt)*)) => {
+        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => $value @ $interpolation),))
     };
 
-    (@rec [ $duration:literal => { $value:expr }, $($r:tt)* ] -> ($($body:tt)*)) => {
-        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ end),))
+    (@rec [ $duration:expr => { $value:expr }, $($r:tt)* ] -> ($($body:tt)*)) => {
+        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value }),))
     };
 
-    (@rec [ $duration:literal => $value:literal, $($r:tt)* ] -> ($($body:tt)*)) => {
-        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => { $value } @ end),))
+    (@rec [ $duration:expr => $value:literal, $($r:tt)* ] -> ($($body:tt)*)) => {
+        $crate::keyframes!(@rec [ $($r)* ] -> ($($body)* $crate::keyframe!($duration => $value),))
     };
 
     ($($frame:tt)*) => {

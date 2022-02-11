@@ -7,7 +7,7 @@ use rand::Rng;
 use scarlet::color::{Color, RGBColor};
 use scarlet::colors::HSVColor;
 
-use crate::engine::animation::{Animated, interpolations, Keyframe};
+use crate::engine::animation::Animated;
 use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::sound::Playback;
 use crate::engine::state::{State, World};
@@ -73,10 +73,7 @@ pub struct Joust {
 }
 
 impl Joust {
-    const CHANGE_SPEED_MUSIC: Duration = Duration::from_millis(500);
-
-    // Change threshold slower than music to give some players time to adapt
-    const CHANGE_SPEED_THRESHOLD: Duration = Self::CHANGE_SPEED_MUSIC.saturating_mul(3);
+    const CHANGE_SPEED: Duration = Duration::from_millis(1000);
 
     const MUSIC_TIME_MIN: Duration = Duration::from_secs(15);
     const MUSIC_TIME_MAX: Duration = Duration::from_secs(30);
@@ -89,36 +86,37 @@ impl State for Joust {
 
         // Check if speed is about to change
         if self.speed.1 < world.now {
-            let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
-
-            let speed = match self.speed.0 {
+            let (speed, slack) = match self.speed.0 {
                 Speed::NORMAL => if rand::thread_rng().gen() {
-                    Speed::FAST
+                    (Speed::FAST, false)
                 } else {
-                    Speed::SLOW
+                    (Speed::SLOW, true)
                 }
-                Speed::FAST |
-                Speed::SLOW => Speed::NORMAL,
+                Speed::FAST => (Speed::NORMAL, true),
+                Speed::SLOW => (Speed::NORMAL, false),
             };
 
-            self.music_speed.animate([
-                Keyframe { duration: Self::CHANGE_SPEED_MUSIC, value: speed.music(), interpolation: interpolations::elastic_in_out }
+            self.music_speed.animate(keyframes![
+                Self::CHANGE_SPEED => { speed.music() } @ linear,
             ]);
-            self.threshold.animate([
-                Keyframe { duration: Self::CHANGE_SPEED_THRESHOLD, value: speed.threshold(), interpolation: interpolations::linear }
-            ]);
+
+            // Apply slack in threshold
+            if slack {
+                self.threshold.animate(keyframes![
+                    Self::CHANGE_SPEED * 3 => { speed.threshold() } @ linear,
+                ]);
+            } else {
+                self.threshold.set(speed.threshold());
+            }
+
+            // Roll a dice for duration of the next phase
+            let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
 
             self.speed = (speed, world.now + duration);
         }
 
         // Update music speed
         self.music.speed(self.music_speed.value());
-
-        // Calculating alive players
-        let alive = self.data.iter()
-            .filter_map(|(id, data)| if data.alive { Some(data) } else { None })
-            .collect::<Vec<_>>();
-
 
         // Update players
         for (player, data) in world.players.with_data(&mut self.data)
@@ -152,8 +150,13 @@ impl State for Joust {
             .filter_map(|(id, data)| if data.alive { Some(id) } else { None })
             .collect::<HashSet<_>>();
 
-        if alive.len() <= 1 {
+        if alive.len() == 1 {
             return Box::new(Winner::new(alive, world));
+        }
+
+        if alive.is_empty() {
+            // Got a draw - everybody is winner
+            return Box::new(Winner::new(self.data.keys().collect(), world));
         }
 
         return self;
@@ -182,7 +185,7 @@ impl Game for Joust {
 
         return Self {
             data: players,
-            speed: (Speed::NORMAL, Instant::now()),
+            speed: (Speed::NORMAL, Instant::now() + Self::MUSIC_TIME_MAX),
             music,
             music_speed: Animated::idle(Speed::NORMAL.music()),
             threshold: Animated::idle(Speed::NORMAL.threshold()),

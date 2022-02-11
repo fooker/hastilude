@@ -1,4 +1,5 @@
 #![feature(type_alias_impl_trait)]
+#![feature(iter_intersperse)]
 
 use std::time::Instant;
 

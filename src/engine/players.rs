@@ -171,6 +171,10 @@ impl<D> PlayerData<D> {
         return self.data.iter_mut()
             .map(|(id, data)| (*id, data));
     }
+
+    pub fn keys(&self) -> impl Iterator<Item=PlayerId> + '_ {
+        return self.data.keys().copied();
+    }
 }
 
 pub struct WithData<'a, D> {
