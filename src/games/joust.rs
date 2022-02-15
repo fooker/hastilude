@@ -12,8 +12,9 @@ use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::sound::Playback;
 use crate::engine::state::{State, World};
 use crate::games::Game;
-use crate::games::meta::{PlayerColor, Winner};
+use crate::games::meta::countdown::PlayerColor;
 use crate::keyframes;
+use crate::games::meta::winner::Winner;
 
 pub struct Player {
     alive: bool,

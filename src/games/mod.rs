@@ -4,9 +4,9 @@ use tracing::debug;
 
 use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::state::{State, World};
-use crate::games::meta::{Countdown, PlayerColor};
-
-use super::debug;
+use crate::games::joust::Joust;
+use crate::games::meta::countdown::{Countdown, PlayerColor};
+use crate::games::meta::debug::Debug;
 
 pub mod meta;
 pub mod joust;
@@ -37,8 +37,8 @@ fn start<T>(players: HashSet<PlayerId>, world: &mut World) -> impl State
 impl GameType {
     pub fn create(self, players: HashSet<PlayerId>, world: &mut World) -> Box<dyn State> {
         return match self {
-            Self::Debug => Box::new(debug::Debug::new(world)),
-            Self::Joust => Box::new(start::<joust::Joust>(players, world)),
+            Self::Debug => Box::new(Debug::new(world)),
+            Self::Joust => Box::new(start::<Joust>(players, world)),
         };
     }
 }

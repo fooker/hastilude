@@ -11,13 +11,11 @@ use crate::engine::players::Players;
 use crate::engine::sound::Sound;
 use crate::engine::state::{StateMachine, World};
 use crate::games::GameType;
-use crate::lobby::Lobby;
+use crate::games::meta::lobby::Lobby;
 
 pub mod controller;
 pub mod engine;
 pub mod games;
-pub mod lobby;
-pub mod debug;
 
 #[tokio::main]
 async fn main() -> Result<()> {
