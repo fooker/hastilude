@@ -10,11 +10,12 @@ use scarlet::colors::HSVColor;
 use crate::engine::animation::Animated;
 use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::sound::Playback;
-use crate::engine::state::{State, World};
-use crate::games::Game;
-use crate::games::meta::countdown::PlayerColor;
+use crate::engine::World;
+use crate::games::{Game, GameData};
 use crate::keyframes;
-use crate::games::meta::winner::Winner;
+use crate::meta::celebration::Celebration;
+use crate::meta::countdown::PlayerColor;
+use crate::state::State;
 
 pub struct Player {
     alive: bool,
@@ -80,8 +81,8 @@ impl Joust {
     const MUSIC_TIME_MAX: Duration = Duration::from_secs(30);
 }
 
-impl State for Joust {
-    fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> Box<dyn State> {
+impl Game for Joust {
+    fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> State {
         self.music_speed.update(duration);
         self.threshold.update(duration);
 
@@ -152,20 +153,24 @@ impl State for Joust {
             .collect::<HashSet<_>>();
 
         if alive.len() == 1 {
-            return Box::new(Winner::new(alive, world));
+            return State::Celebration(Celebration::new(alive, world));
         }
 
         if alive.is_empty() {
             // Got a draw - everybody is winner
-            return Box::new(Winner::new(self.data.keys().collect(), world));
+            return State::Celebration(Celebration::new(self.data.keys().collect(), world));
         }
 
-        return self;
+        return State::Playing(self);
     }
 }
 
-impl Game for Joust {
+impl GameData for Joust {
     type Data = Player;
+
+    fn data(&mut self) -> &mut PlayerData<Player> {
+        return &mut self.data;
+    }
 
     fn create(players: HashSet<PlayerId>, world: &mut World) -> Self {
         let music = world.assets.music.random();
@@ -191,9 +196,5 @@ impl Game for Joust {
             music_speed: Animated::idle(Speed::NORMAL.music()),
             threshold: Animated::idle(Speed::NORMAL.threshold()),
         };
-    }
-
-    fn data(&mut self) -> &mut PlayerData<Self::Data> {
-        return &mut self.data;
     }
 }

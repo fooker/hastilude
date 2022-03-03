@@ -1,45 +1,83 @@
 use std::collections::HashSet;
+use std::fmt;
+use std::str::FromStr;
 
 use tracing::debug;
 
 use crate::engine::players::{PlayerData, PlayerId};
-use crate::engine::state::{State, World};
+use crate::engine::World;
+use crate::games::debug::Debug;
 use crate::games::joust::Joust;
-use crate::games::meta::countdown::{Countdown, PlayerColor};
-use crate::games::meta::debug::Debug;
+use crate::meta::countdown::{Countdown, PlayerColor};
+use crate::state::State;
+use std::time::Duration;
 
-pub mod meta;
+pub mod debug;
 pub mod joust;
 
-pub trait Game: State + Sized + 'static {
+pub trait GameData: Game {
     type Data;
 
-    fn create(players: HashSet<PlayerId>, world: &mut World) -> Self;
-
     fn data(&mut self) -> &mut PlayerData<Self::Data>;
+
+    fn create(players: HashSet<PlayerId>, world: &mut World) -> Self
+        where Self: Sized;
+}
+
+pub trait Game {
+    fn update(self: Box<Self>, world: &mut World, duration: Duration) -> State;
 }
 
 #[derive(Debug, Copy, Clone)]
-pub enum GameType {
+pub enum GameMode {
     Debug,
     Joust,
 }
 
-fn start<T>(players: HashSet<PlayerId>, world: &mut World) -> impl State
-    where T: Game,
-          T::Data: PlayerColor {
-    let game = T::create(players, world);
-    debug!("Game created");
-
-    return Countdown::new(game, world);
+impl ToString for GameMode {
+    fn to_string(&self) -> String {
+        return match self {
+            GameMode::Debug => "debug",
+            GameMode::Joust => "joust",
+        }.to_owned();
+    }
 }
 
-impl GameType {
-    pub fn create(self, players: HashSet<PlayerId>, world: &mut World) -> Box<dyn State> {
-        return match self {
-            Self::Debug => Box::new(Debug::new(world)),
-            Self::Joust => Box::new(start::<Joust>(players, world)),
+impl FromStr for GameMode {
+    type Err = ParseGameTypeError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        return match s {
+            "debug" => Ok(Self::Debug),
+            "joust" => Ok(Self::Joust),
+            _ => Err(ParseGameTypeError),
         };
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParseGameTypeError;
+
+impl fmt::Display for ParseGameTypeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        return "provided string was not a known game mode".fmt(f);
+    }
+}
+
+fn start<T>(players: HashSet<PlayerId>, world: &mut World) -> State
+    where T: Game + GameData + 'static,
+          T::Data: PlayerColor {
+    let game = T::create(players, world);
+    debug!("Game created");
+
+    return State::Countdown(Countdown::new(game, world));
+}
+
+impl GameMode {
+    pub fn create(self, players: HashSet<PlayerId>, world: &mut World) -> State {
+        return match self {
+            Self::Debug => State::Playing(Box::new(Debug::new(world))),
+            Self::Joust => start::<Joust>(players, world),
+        };
+    }
+}

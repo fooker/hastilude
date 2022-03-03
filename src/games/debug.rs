@@ -3,10 +3,11 @@ use std::time::Duration;
 use scarlet::color::RGBColor;
 use scarlet::colorpoint::ColorPoint;
 
-use crate::engine::sound::Playback;
-use crate::engine::state::{State, World};
 use crate::controller::Battery;
-use crate::games::meta::lobby::Lobby;
+use crate::engine::sound::Playback;
+use crate::engine::World;
+use crate::games::Game;
+use crate::state::State;
 
 pub struct Debug {
     music: Playback,
@@ -44,8 +45,8 @@ impl Debug {
     }
 }
 
-impl State for Debug {
-    fn update(mut self: Box<Self>, world: &mut World, _: Duration) -> Box<dyn State> {
+impl Game for Debug {
+    fn update(mut self: Box<Self>, world: &mut World, _duration: Duration) -> State {
         let triangle = world.players.iter()
             .any(|player| player.input().buttons.triangle);
 
@@ -69,7 +70,7 @@ impl State for Debug {
 
         if world.players.iter()
             .any(|player| player.input().buttons.start || player.input().buttons.cross) {
-            return Box::new(Lobby::new(world.players));
+            return State::lobby(world.players);
         }
 
         if let Some(player) = world.players.iter().next() {
@@ -82,6 +83,6 @@ impl State for Debug {
             self.music.speed(speed);
         }
 
-        return self;
+        return State::Playing(self);
     }
 }

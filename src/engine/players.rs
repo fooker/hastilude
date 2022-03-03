@@ -112,6 +112,16 @@ impl Players {
         return self.players.values_mut();
     }
 
+    pub fn get(&self, id: PlayerId) -> Option<&Player> {
+        return self.players.values()
+            .find(|player| player.id() == id);
+    }
+
+    pub fn get_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
+        return self.players.values_mut()
+            .find(|player| player.id() == id);
+    }
+
     pub fn with_data<'a, D>(&'a mut self, data: &'a mut PlayerData<D>) -> WithData<'a, D> {
         return WithData {
             iter: self.players.values_mut(),

@@ -1,12 +1,13 @@
 use std::collections::HashSet;
-use std::time::Duration;
 
 use scarlet::color::RGBColor;
 use tracing::debug;
 
+use crate::{GAME_MODE, keyframes};
 use crate::engine::players::{PlayerId, Players};
-use crate::engine::state::{State, World};
-use crate::keyframes;
+use crate::engine::World;
+use crate::games::debug;
+use crate::state::State;
 
 pub struct Lobby {
     ready: HashSet<PlayerId>,
@@ -24,10 +25,8 @@ impl Lobby {
             ready: HashSet::new(),
         };
     }
-}
 
-impl State for Lobby {
-    fn update(mut self: Box<Self>, world: &mut World, _: Duration) -> Box<dyn State> {
+    pub fn update(mut self, world: &mut World) -> State {
         // Players can start the game by pressing the start button. But only if more than one player
         // is ready. By this they will become ready themself.
         let mut start = false;
@@ -51,7 +50,7 @@ impl State for Lobby {
             }
 
             if player.input().buttons.circle {
-                player.color.set(super::debug::battery_to_color(player.battery()));
+                player.color.set(debug::battery_to_color(player.battery()));
             } else if self.ready.contains(&player.id()) {
                 player.color.set(RGBColor { r: 1.0, g: 1.0, b: 1.0 });
             } else {
@@ -68,12 +67,11 @@ impl State for Lobby {
             // Collect players and reset ready list for next game
             let players = std::mem::take(&mut self.ready);
 
-            debug!("Starting game {:?}", world.game);
-            let game = world.game.create(players, world);
-
-            return game;
+            let game_mode = GAME_MODE.lock();
+            debug!("Starting game {:?}", game_mode);
+            return game_mode.create(players, world);
         }
 
-        return self;
+        return State::Lobby(self);
     }
 }

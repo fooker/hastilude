@@ -3,29 +3,26 @@ use std::time::Duration;
 use scarlet::color::RGBColor;
 use tracing::debug;
 
-use crate::engine::state::{State, World};
-use crate::games::Game;
+use crate::engine::World;
+use crate::games::{Game, GameData};
 use crate::keyframes;
+use crate::state::State;
 
 pub trait PlayerColor {
     fn color(&self) -> RGBColor;
 }
 
-pub struct Countdown<T>
-    where
-        T: Game,
-        T::Data: PlayerColor,
-{
-    game: T,
+pub struct Countdown {
+    game: Box<dyn Game>,
     elapsed: Duration,
 }
 
-impl<T> Countdown<T>
-    where
-        T: Game,
-        T::Data: PlayerColor,
-{
-    pub fn new(mut game: T, world: &mut World) -> Self {
+impl Countdown {
+    pub fn new<T>(mut game: T, world: &mut World) -> Self
+        where
+            T: Game + GameData + 'static,
+            T::Data: PlayerColor,
+    {
         debug!("Start countdown");
 
         // Short initial buzz for all players
@@ -52,25 +49,19 @@ impl<T> Countdown<T>
         }
 
         return Self {
-            game,
+            game: Box::new(game),
             elapsed: Duration::ZERO,
         };
     }
-}
 
-impl<T> State for Countdown<T>
-    where
-        T: Game,
-        T::Data: PlayerColor,
-{
-    fn update(mut self: Box<Self>, _: &mut World, duration: Duration) -> Box<dyn State> {
+    pub fn update(mut self, _: &mut World, duration: Duration) -> State {
         self.elapsed += duration;
 
         if self.elapsed >= Duration::from_secs(3) {
             debug!("Countdown finished - start game");
-            return Box::new(self.game);
+            return State::Playing(self.game);
         }
 
-        return self;
+        return State::Countdown(self);
     }
 }

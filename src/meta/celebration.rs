@@ -8,14 +8,14 @@ use tracing::debug;
 
 use crate::{keyframe, keyframes};
 use crate::engine::players::{PlayerData, PlayerId};
-use crate::engine::state::{State, World};
-use crate::games::meta::lobby::Lobby;
+use crate::engine::World;
+use crate::state::State;
 
-pub struct Winner {
+pub struct Celebration {
     elapsed: Duration,
 }
 
-impl Winner {
+impl Celebration {
     const TIME: Duration = Duration::from_secs(10);
 
     pub fn new(winners: HashSet<PlayerId>, world: &mut World) -> Self {
@@ -68,17 +68,15 @@ impl Winner {
             elapsed: Duration::ZERO,
         };
     }
-}
 
-impl State for Winner {
-    fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> Box<dyn State> {
+    pub fn update(mut self, world: &mut World, duration: Duration) -> State {
         self.elapsed += duration;
 
         if self.elapsed >= Duration::from_secs(10) {
             debug!("Enough partying - back to lobby");
-            return Box::new(Lobby::new(world.players));
+            return State::lobby(world.players);
         }
 
-        return self;
+        return State::Celebration(self);
     }
 }
