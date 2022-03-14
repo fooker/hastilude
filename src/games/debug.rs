@@ -8,6 +8,7 @@ use crate::engine::sound::Playback;
 use crate::engine::World;
 use crate::games::Game;
 use crate::state::State;
+use crate::engine::players::PlayerId;
 
 pub struct Debug {
     music: Playback,
@@ -84,5 +85,9 @@ impl Game for Debug {
         }
 
         return State::Playing(self);
+    }
+
+    fn kick_player(&mut self, _player: PlayerId, _world: &mut World) -> bool {
+        return false;
     }
 }

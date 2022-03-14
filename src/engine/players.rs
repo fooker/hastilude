@@ -185,6 +185,10 @@ impl<D> PlayerData<D> {
     pub fn keys(&self) -> impl Iterator<Item=PlayerId> + '_ {
         return self.data.keys().copied();
     }
+
+    pub fn remove(&mut self, player: PlayerId) -> bool {
+        return self.data.remove(&player).is_some();
+    }
 }
 
 pub struct WithData<'a, D> {

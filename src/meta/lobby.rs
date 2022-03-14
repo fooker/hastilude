@@ -64,14 +64,25 @@ impl Lobby {
         }
 
         if start {
-            // Collect players and reset ready list for next game
-            let players = std::mem::take(&mut self.ready);
-
             let game_mode = GAME_MODE.lock();
             debug!("Starting game {:?}", game_mode);
-            return game_mode.create(players, world);
+            return game_mode.create(self.ready, world);
         }
 
         return State::Lobby(self);
+    }
+
+    pub fn start(self, world: &mut World) -> (State, bool) {
+        if self.ready.len() >= 2 {
+            let game_mode = GAME_MODE.lock();
+            debug!("Starting game {:?} by external event", game_mode);
+            return (game_mode.create(self.ready, world), true);
+        } else {
+            return (State::Lobby(self), false);
+        }
+    }
+
+    pub fn kick_player(&mut self, player: PlayerId) -> bool {
+        return self.ready.remove(&player);
     }
 }

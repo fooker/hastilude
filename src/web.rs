@@ -1,199 +1,153 @@
 use std::future::Future;
 use std::net::SocketAddr;
-use std::str::FromStr;
-use std::sync::Arc;
 
 use anyhow::Result;
-use axum::{AddExtensionLayer, Json, Router, Server};
-use axum::body::{boxed, Empty, Full};
-use axum::extract::{Extension, Path};
-use axum::http::{header, Response};
-use axum::response::IntoResponse;
-use axum::routing::{get, MethodRouter, post};
-use futures::{SinkExt, TryFutureExt};
 use futures::channel::mpsc;
-use hyper::{StatusCode, Uri};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use warp::{body, Filter, get, http, log, path, post, reject, Rejection, Reply, reply};
 
 use crate::engine::players::PlayerId;
 use crate::GAME_MODE;
 use crate::games::GameMode;
+use crate::state::{StartGameError, CancelGameError, NoSuchPlayerError};
+use crate::state::request::{Stub, Actions};
 
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
 struct Static;
 
 impl Static {
-    pub async fn handle(uri: Uri) -> impl IntoResponse {
-        let mut path = uri.path().trim_start_matches('/');
-        if path == "" {
-            path = "index.html";
-        }
+    async fn serve(path: &str) -> Result<impl Reply, Rejection> {
+        let asset = Self::get(path)
+            .ok_or_else(reject::not_found)?;
 
-        match Self::get(path) {
-            Some(content) => {
-                let body = boxed(Full::from(content.data));
-                let mime = mime_guess::from_path(path).first_or_octet_stream();
-                return Response::builder()
-                    .header(header::CONTENT_TYPE, mime.as_ref())
-                    .body(body)
-                    .expect("Invalid response");
-            }
+        let mime = mime_guess::from_path(path).first_or_octet_stream();
 
-            None => {
-                return Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(boxed(Empty::default()))
-                    .expect("Invalid response");
-            }
-        }
+        return Ok(http::Response::builder()
+            .header("Content-Type", mime.as_ref())
+            .body(asset.data));
+    }
+
+    pub async fn serve_index() -> Result<impl Reply, Rejection> {
+        return Self::serve("index.html").await;
+    }
+
+    pub async fn serve_asset(path: path::Tail) -> Result<impl Reply, Rejection> {
+        return Self::serve(path.as_str()).await;
+    }
+
+    pub fn route() -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+        let index = path::end().and_then(Self::serve_index);
+        let asset = path::tail().and_then(Self::serve_asset);
+
+        return get()
+            .and(Filter::or(index, asset));
     }
 }
 
-pub enum CancelGameResponse {
-    Canceled,
-    NotRunning,
-}
-
-pub enum StartGameResponse {
-    Started,
-    AlreadyRunning,
-    NotEnoughPlayers,
-}
-
-pub enum KickPlayerResponse {
-    Kicked,
-    NotFound,
-    AlreadyDead,
-}
-
-pub enum BuzzPlayerResponse {
-    Buzzed,
-    NotFound,
-}
-
-pub enum Action {
-    CancelGame {
-        response: futures::channel::oneshot::Sender<CancelGameResponse>,
-    },
-
-    StartGame {
-        response: futures::channel::oneshot::Sender<StartGameResponse>,
-    },
-
-    KickPlayer {
-        player: PlayerId,
-        response: futures::channel::oneshot::Sender<KickPlayerResponse>,
-    },
-
-    BuzzPlayer {
-        player: PlayerId,
-        response: futures::channel::oneshot::Sender<BuzzPlayerResponse>,
-    },
-}
-
-#[derive(Clone)]
-struct State {
-    actions: mpsc::Sender<Action>,
-}
-
 #[derive(Serialize, Deserialize)]
-pub struct ModePayload {
-    pub mode: String,
+pub struct GameModePayload {
+    pub mode: GameMode,
 }
 
-async fn mode_get() -> impl IntoResponse {
-    return Json(ModePayload {
-        mode: GAME_MODE.lock().to_string()
-    });
+impl reject::Reject for StartGameError {}
+
+impl reject::Reject for CancelGameError {}
+
+impl reject::Reject for NoSuchPlayerError {}
+
+fn mode_get() -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+    return get()
+        .and(path!("mode"))
+        .map(move || {
+            let mode = GameModePayload { mode: *GAME_MODE.lock() };
+            return Ok(reply::json(&mode));
+        });
 }
 
-async fn mode_set(Json(payload): Json<ModePayload>) -> Result<impl IntoResponse, (StatusCode, String)> {
-    *GAME_MODE.lock() = GameMode::from_str(&payload.mode)
-        .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
-    return Ok(());
+fn mode_set() -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+    return post()
+        .and(path!("mode"))
+        .and(body::json())
+        .map(move |body: GameModePayload| {
+            *GAME_MODE.lock() = body.mode;
+            return Ok(http::StatusCode::OK);
+        });
 }
 
-async fn game_start(Extension(mut state): Extension<State>) -> Result<impl IntoResponse, (StatusCode, &'static str)> {
-    let (response, result) = futures::channel::oneshot::channel();
-    state.actions.send(Action::StartGame { response }).await
-        .map_err(|_| ((StatusCode::SERVICE_UNAVAILABLE, "Request not send")))?;
-    return match result.await {
-        Ok(StartGameResponse::Started) => Ok(()),
-        Ok(StartGameResponse::AlreadyRunning) => Err((StatusCode::CONFLICT, "Already running")),
-        Ok(StartGameResponse::NotEnoughPlayers) => Err((StatusCode::NOT_ACCEPTABLE, "Not enough players")),
-        Err(_) => Err((StatusCode::SERVICE_UNAVAILABLE, "Request canceled")),
-    };
+fn game_start(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+    return post()
+        .map(move || stub.clone())
+        .and(path!("game" / "start"))
+        .and_then(|mut stub: Stub| async move {
+            return match stub.start_game().await {
+                Ok(()) => Ok(http::StatusCode::OK),
+                Err(err) => Err(reject::custom(err)),
+            };
+        });
 }
 
-async fn game_cancel(Extension(mut state): Extension<State>) -> impl IntoResponse {
-    let (response, result) = futures::channel::oneshot::channel();
-    state.actions.send(Action::CancelGame { response }).await
-        .map_err(|_| ((StatusCode::SERVICE_UNAVAILABLE, "Request not send")))?;
-    return match result.await {
-        Ok(CancelGameResponse::Canceled) => Ok(()),
-        Ok(CancelGameResponse::NotRunning) => Err((StatusCode::CONFLICT, "Not running")),
-        Err(_) => Err((StatusCode::SERVICE_UNAVAILABLE, "Request canceled")),
-    };
+fn game_cancel(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+    return post()
+        .map(move || stub.clone())
+        .and(path!("game" / "cancel"))
+        .and_then(|mut stub: Stub| async move {
+            return match stub.cancel_game().await {
+                Ok(()) => Ok(http::StatusCode::OK),
+                Err(err) => Err(reject::custom(err)),
+            };
+        });
 }
 
-async fn player_buzz(Extension(mut state): Extension<State>, Path(id): Path<PlayerId>) -> impl IntoResponse {
-    let (response, result) = futures::channel::oneshot::channel();
-    state.actions.send(Action::BuzzPlayer { player: id, response }).await
-        .map_err(|_| ((StatusCode::SERVICE_UNAVAILABLE, "Request not send")))?;
-    return match result.await {
-        Ok(BuzzPlayerResponse::Buzzed) => Ok(()),
-        Ok(BuzzPlayerResponse::NotFound) => Err((StatusCode::NOT_FOUND, "No such player")),
-        Err(_) => Err((StatusCode::SERVICE_UNAVAILABLE, "Request canceled")),
-    };
+fn player_buzz(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+    return post()
+        .map(move || stub.clone())
+        .and(path!("player" / PlayerId / "buzz"))
+        .and_then(|mut stub: Stub, player_id: PlayerId| async move {
+            return match stub.buzz_player(player_id).await {
+                Ok(()) => Ok(http::StatusCode::OK),
+                Err(err) => Err(reject::custom(err)),
+            };
+        });
 }
 
-async fn player_kick(Extension(mut state): Extension<State>, Path(id): Path<PlayerId>) -> impl IntoResponse {
-    let (response, result) = futures::channel::oneshot::channel();
-    state.actions.send(Action::KickPlayer { player: id, response }).await
-        .map_err(|_| ((StatusCode::SERVICE_UNAVAILABLE, "Request not send")))?;
-    return match result.await {
-        Ok(KickPlayerResponse::Kicked) => Ok(()),
-        Ok(KickPlayerResponse::NotFound) => Err((StatusCode::NOT_FOUND, "No such player")),
-        Ok(KickPlayerResponse::AlreadyDead) => Err((StatusCode::CONFLICT, "Already dead")),
-        Err(_) => Err((StatusCode::SERVICE_UNAVAILABLE, "Request canceled"))
-    };
+fn player_kick(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+    return post()
+        .map(move || stub.clone())
+        .and(path!("game" / PlayerId / "kick"))
+        .and_then(|mut stub: Stub, player_id: PlayerId| async move {
+            return match stub.kick_player(player_id).await {
+                Ok(()) => Ok(http::StatusCode::OK),
+                Err(err) => Err(reject::custom(err)),
+            };
+        });
 }
 
-fn api() -> (Router, mpsc::Receiver<Action>) {
-    let (actions_tx, actions_rx) = mpsc::channel(1);
-
-    let shared = State {
-        actions: actions_tx,
-    };
-
-    return (Router::new()
-                .layer(AddExtensionLayer::new(Arc::new(shared)))
-                .route("/mode", MethodRouter::new()
-                    .get(mode_get)
-                    .post(mode_set))
-                .route("/game/start", post(game_start))
-                .route("/game/cancel", post(game_cancel))
-                .route("/players/:id/buzz", post(player_buzz))
-                .route("/players/:id/kick", post(player_kick))
-            , actions_rx);
-}
-
-pub fn serve() -> Result<(mpsc::Receiver<Action>, impl Future<Output=Result<()>>)> {
-    let (api, actions_rx) = api();
-
-    let app = Router::new()
-        .nest("/api", api)
-        .fallback(get(Static::handle));
-
+pub fn serve() -> Result<(impl Future<Output=()>, mpsc::Receiver<Actions>)> {
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
+
+    let (stub, requests) = Stub::create();
+
+    let api = mode_get()
+        .or(mode_set())
+        .or(game_start(stub.clone()))
+        .or(game_cancel(stub.clone()))
+        .or(player_buzz(stub.clone()))
+        .or(player_kick(stub.clone()));
+
+    let api = path("api")
+        .and(api)
+        .with(log::log("api"));
+
+    let routes = Filter::or(
+        Static::route(),
+        api);
+
+    let server = warp::serve(routes).run(addr);
 
     info!("Web-Server listening on {}", addr);
 
-    return Ok((actions_rx,
-               Server::try_bind(&addr)?
-                   .serve(app.into_make_service())
-                   .map_err(Into::into)));
+    return Ok((server, requests));
 }

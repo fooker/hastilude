@@ -163,6 +163,10 @@ impl Game for Joust {
 
         return State::Playing(self);
     }
+
+    fn kick_player(&mut self, player: PlayerId, world: &mut World) -> bool {
+        return GameData::kick_player(self, player, world);
+    }
 }
 
 impl GameData for Joust {

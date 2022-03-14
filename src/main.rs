@@ -5,10 +5,11 @@
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use futures::task::Poll;
 use parking_lot::Mutex;
 
 use crate::engine::assets::Assets;
-use crate::engine::players::{Players};
+use crate::engine::players::Players;
 use crate::engine::sound::Sound;
 use crate::engine::World;
 use crate::games::GameMode;
@@ -17,6 +18,7 @@ use crate::state::State;
 pub mod controller;
 pub mod engine;
 pub mod games;
+pub mod web;
 pub mod meta;
 pub mod state;
 
@@ -45,22 +47,36 @@ async fn main() -> Result<()> {
     // Initialize fresh state machine
     let mut state = State::lobby(&mut players);
 
+    // Start web interface
+    let (web, mut requests) = web::serve()?;
+    let mut web = tokio::spawn(web);
+
     loop {
         // Calculate last frame duration
         let now = Instant::now();
         let duration = now - last;
 
+        // Handle failures from the web server
+        if let Poll::Ready(result) = futures::poll!(&mut web) {
+            return result.map_err(Into::into);
+        };
+
         // Update controller information
         players.update(duration).await
             .context("Failed to update players")?;
 
-        // Play the game
-        state = state.update(&mut World {
+        let mut world = World {
             now,
             players: &mut players,
             sound: &mut sound,
             assets: &assets,
-        }, duration);
+        };
+
+        // Handle requests
+        state = state.handle(&mut requests, &mut world).await;
+
+        // Play the game
+        state = state.update(&mut world, duration);
 
         last = now;
     }
