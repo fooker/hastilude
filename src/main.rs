@@ -6,14 +6,13 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use futures::task::Poll;
-use parking_lot::Mutex;
 
 use crate::engine::assets::Assets;
 use crate::engine::players::Players;
 use crate::engine::sound::Sound;
 use crate::engine::World;
-use crate::games::GameMode;
 use crate::state::State;
+use crate::web::{Info, GameState};
 
 pub mod controller;
 pub mod engine;
@@ -21,8 +20,6 @@ pub mod games;
 pub mod web;
 pub mod meta;
 pub mod state;
-
-static GAME_MODE: Mutex<GameMode> = parking_lot::const_mutex(GameMode::Joust);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -48,7 +45,7 @@ async fn main() -> Result<()> {
     let mut state = State::lobby(&mut players);
 
     // Start web interface
-    let (web, mut requests) = web::serve()?;
+    let (web, mut requests, mut info) = web::serve()?;
     let mut web = tokio::spawn(web);
 
     loop {
@@ -77,6 +74,12 @@ async fn main() -> Result<()> {
 
         // Play the game
         state = state.update(&mut world, duration);
+
+        // Publish updated status info
+        info.publish(Info {
+            mode: *state::GAME_MODE.lock(),
+            state: GameState::Waiting { ready: Vec::new() },
+        });
 
         last = now;
     }

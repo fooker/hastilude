@@ -3,11 +3,11 @@ use std::collections::HashSet;
 use scarlet::color::RGBColor;
 use tracing::debug;
 
-use crate::{GAME_MODE, keyframes};
+use crate::{keyframes};
 use crate::engine::players::{PlayerId, Players};
 use crate::engine::World;
 use crate::games::debug;
-use crate::state::State;
+use crate::state::{State, GAME_MODE};
 
 pub struct Lobby {
     ready: HashSet<PlayerId>,

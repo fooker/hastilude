@@ -36,7 +36,7 @@ pub trait Game {
     fn kick_player(&mut self, player: PlayerId, world: &mut World) -> bool;
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub enum GameMode {
     Debug,
     Joust,

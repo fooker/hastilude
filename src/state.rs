@@ -1,14 +1,17 @@
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use thiserror::Error;
 
 use crate::engine::players::{PlayerId, Players};
 use crate::engine::World;
-use crate::games::Game;
+use crate::games::{Game, GameMode};
 use crate::keyframes;
 use crate::meta::celebration::Celebration;
 use crate::meta::countdown::Countdown;
 use crate::meta::lobby::Lobby;
+
+pub static GAME_MODE: Mutex<GameMode> = parking_lot::const_mutex(GameMode::Joust);
 
 pub enum State {
     Lobby(Lobby),
@@ -117,6 +120,7 @@ pub mod request {
 
     use crate::engine::players::PlayerId;
     use crate::engine::World;
+    use crate::games::GameMode;
     use crate::state::{CancelGameError, NoSuchPlayerError, StartGameError};
 
     pub struct Action<Req, Res> {
@@ -132,6 +136,7 @@ pub mod request {
     }
 
     pub enum Actions {
+        GameMode(Action<GameMode, ()>),
         StartGame(Action<(), Result<(), StartGameError>>),
         CancelGame(Action<(), Result<(), CancelGameError>>),
         BuzzPlayer(Action<PlayerId, Result<(), NoSuchPlayerError>>),
@@ -152,6 +157,10 @@ pub mod request {
             let (action, response) = Action::with_args(args);
             self.0.send(f(action)).await.expect("Sending request");
             return response.await.expect("Receiving response");
+        }
+
+        pub async fn game_mode(&mut self, mode: GameMode) -> () {
+            return self.call(mode, Actions::GameMode).await;
         }
 
         pub async fn start_game(&mut self) -> Result<(), StartGameError> {
@@ -175,6 +184,12 @@ pub mod request {
         pub async fn handle(self, requests: &mut mpsc::Receiver<Actions>, world: &mut World<'_>) -> Self {
             if let Poll::Ready(Some(request)) = futures::poll!(requests.next()) {
                 match request {
+                    Actions::GameMode(action) => {
+                        *super::GAME_MODE.lock() = action.request;
+                        action.response.send(()).expect("Sending response");
+                        return self;
+                    }
+
                     Actions::StartGame(action) => {
                         let (state, result) = self.start(world);
                         action.response.send(result).expect("Sending response");

@@ -2,17 +2,19 @@ use std::future::Future;
 use std::net::SocketAddr;
 
 use anyhow::Result;
+use futures::SinkExt;
 use futures::channel::mpsc;
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 use tracing::info;
-use warp::{body, Filter, get, http, log, path, post, reject, Rejection, Reply, reply};
+use warp::{body, Filter, get, http, log, path, post, reject, Rejection, Reply};
+use warp::ws;
 
 use crate::engine::players::PlayerId;
-use crate::GAME_MODE;
 use crate::games::GameMode;
-use crate::state::{StartGameError, CancelGameError, NoSuchPlayerError};
-use crate::state::request::{Stub, Actions};
+use crate::state::{CancelGameError, NoSuchPlayerError, StartGameError};
+use crate::state::request::{Actions, Stub};
 
 #[derive(RustEmbed)]
 #[folder = "web/dist/"]
@@ -47,6 +49,43 @@ impl Static {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub enum GameState {
+    Waiting {
+        ready: Vec<PlayerId>,
+    },
+
+    Running {},
+}
+
+#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
+pub struct Info {
+    pub mode: GameMode,
+
+    pub state: GameState,
+}
+
+impl Default for Info {
+    fn default() -> Self {
+        return Self {
+            mode: GameMode::Debug,
+            state: GameState::Waiting {
+                ready: Vec::default(),
+            },
+        };
+    }
+}
+
+pub struct InfoPublisher(watch::Sender<Info>);
+
+impl InfoPublisher {
+    pub fn publish(&mut self, info: Info) {
+        if *self.0.borrow() != info {
+            self.0.send_replace(info);
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct GameModePayload {
     pub mode: GameMode,
@@ -58,22 +97,14 @@ impl reject::Reject for CancelGameError {}
 
 impl reject::Reject for NoSuchPlayerError {}
 
-fn mode_get() -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
-    return get()
-        .and(path!("mode"))
-        .map(move || {
-            let mode = GameModePayload { mode: *GAME_MODE.lock() };
-            return Ok(reply::json(&mode));
-        });
-}
-
-fn mode_set() -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+fn mode_set(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
     return post()
+        .map(move || stub.clone())
         .and(path!("mode"))
         .and(body::json())
-        .map(move |body: GameModePayload| {
-            *GAME_MODE.lock() = body.mode;
-            return Ok(http::StatusCode::OK);
+        .then(|mut stub: Stub, body: GameModePayload| async move {
+            stub.game_mode(body.mode).await;
+            return http::StatusCode::OK;
         });
 }
 
@@ -125,17 +156,43 @@ fn player_kick(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> +
         });
 }
 
-pub fn serve() -> Result<(impl Future<Output=()>, mpsc::Receiver<Actions>)> {
+fn status(rx: watch::Receiver<Info>) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+    return ws()
+        .and(path!("status"))
+        .map(move |ws: ws::Ws| {
+            let mut rx = rx.clone();
+            ws.on_upgrade(|mut ws| async move {
+                loop {
+                    let info = rx.borrow_and_update().clone();
+                    let info = serde_json::to_string(&info)
+                        .expect("Failed to serialize status message");
+
+                    if let Err(_) = ws.send(ws::Message::text(info)).await {
+                        break;
+                    }
+
+                    if let Err(_) = rx.changed().await {
+                        break;
+                    }
+                }
+            })
+        });
+}
+
+pub fn serve() -> Result<(impl Future<Output=()>, mpsc::Receiver<Actions>, InfoPublisher)> {
     let addr: SocketAddr = "0.0.0.0:3000".parse()?;
 
     let (stub, requests) = Stub::create();
 
-    let api = mode_get()
-        .or(mode_set())
+    let (info_publisher, info_watch) = watch::channel(Info::default());
+    let info_publisher = InfoPublisher(info_publisher);
+
+    let api = mode_set(stub.clone())
         .or(game_start(stub.clone()))
         .or(game_cancel(stub.clone()))
         .or(player_buzz(stub.clone()))
-        .or(player_kick(stub.clone()));
+        .or(player_kick(stub.clone()))
+        .or(status(info_watch));
 
     let api = path("api")
         .and(api)
@@ -149,5 +206,5 @@ pub fn serve() -> Result<(impl Future<Output=()>, mpsc::Receiver<Actions>)> {
 
     info!("Web-Server listening on {}", addr);
 
-    return Ok((server, requests));
+    return Ok((server, requests, info_publisher));
 }
