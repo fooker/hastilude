@@ -1,22 +1,25 @@
 use std::time::Duration;
 
-use parking_lot::Mutex;
 use thiserror::Error;
 
 use crate::engine::players::{PlayerId, Players};
-use crate::engine::World;
-use crate::games::{Game, GameMode};
+use crate::games::{GameMode, GameState};
 use crate::keyframes;
 use crate::meta::celebration::Celebration;
 use crate::meta::countdown::Countdown;
 use crate::meta::lobby::Lobby;
 
-pub static GAME_MODE: Mutex<GameMode> = parking_lot::const_mutex(GameMode::Joust);
+#[derive(Debug, Default)]
+pub struct Settings {
+    pub game_mode: GameMode,
+}
+
+pub type World<'a> = crate::engine::World<'a, Settings>;
 
 pub enum State {
     Lobby(Lobby),
     Countdown(Countdown),
-    Playing(Box<dyn Game>),
+    Playing(GameState),
     Celebration(Celebration),
 }
 
@@ -119,9 +122,8 @@ pub mod request {
     use futures::task::Poll;
 
     use crate::engine::players::PlayerId;
-    use crate::engine::World;
     use crate::games::GameMode;
-    use crate::state::{CancelGameError, NoSuchPlayerError, StartGameError};
+    use super::{World, CancelGameError, NoSuchPlayerError, StartGameError};
 
     pub struct Action<Req, Res> {
         request: Req,
@@ -149,7 +151,6 @@ pub mod request {
     impl Stub {
         pub fn create() -> (Stub, mpsc::Receiver<Actions>) {
             let (tx, rx) = mpsc::channel(1);
-
             return (Stub(tx), rx);
         }
 
@@ -185,7 +186,7 @@ pub mod request {
             if let Poll::Ready(Some(request)) = futures::poll!(requests.next()) {
                 match request {
                     Actions::GameMode(action) => {
-                        *super::GAME_MODE.lock() = action.request;
+                        world.settings.game_mode = action.request;
                         action.response.send(()).expect("Sending response");
                         return self;
                     }

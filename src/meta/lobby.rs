@@ -3,11 +3,10 @@ use std::collections::HashSet;
 use scarlet::color::RGBColor;
 use tracing::debug;
 
-use crate::{keyframes};
+use crate::keyframes;
 use crate::engine::players::{PlayerId, Players};
-use crate::engine::World;
 use crate::games::debug;
-use crate::state::{State, GAME_MODE};
+use crate::state::{State, World};
 
 pub struct Lobby {
     ready: HashSet<PlayerId>,
@@ -64,9 +63,8 @@ impl Lobby {
         }
 
         if start {
-            let game_mode = GAME_MODE.lock();
-            debug!("Starting game {:?}", game_mode);
-            return game_mode.create(self.ready, world);
+            debug!("Starting game {:?}", world.settings.game_mode);
+            return world.settings.game_mode.create(self.ready, world);
         }
 
         return State::Lobby(self);
@@ -74,9 +72,8 @@ impl Lobby {
 
     pub fn start(self, world: &mut World) -> (State, bool) {
         if self.ready.len() >= 2 {
-            let game_mode = GAME_MODE.lock();
-            debug!("Starting game {:?} by external event", game_mode);
-            return (game_mode.create(self.ready, world), true);
+            debug!("Starting game {:?} by external event", world.settings.game_mode);
+            return (world.settings.game_mode.create(self.ready, world), true);
         } else {
             return (State::Lobby(self), false);
         }
@@ -84,5 +81,9 @@ impl Lobby {
 
     pub fn kick_player(&mut self, player: PlayerId) -> bool {
         return self.ready.remove(&player);
+    }
+
+    pub fn ready(&self) -> &HashSet<PlayerId> {
+        return &self.ready;
     }
 }

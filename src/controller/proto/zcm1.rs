@@ -1,6 +1,8 @@
 use anyhow::Result;
 use packed_struct::prelude::{Integer, packed_bits, PackedStruct};
 
+// TODO: Check out https://crates.io/crates/deku for struct packing
+
 use crate::controller::Feedback;
 use crate::controller::proto::{Address, Feature, Get, Primary, Set};
 

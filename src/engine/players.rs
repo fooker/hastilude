@@ -1,20 +1,22 @@
-use std::collections::{hash_map, HashMap, HashSet};
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::Result;
+use cgmath::InnerSpace;
 use futures::{StreamExt, task::Poll};
+use heapless::HistoryBuffer;
 use scarlet::color::RGBColor;
 use tokio::time::timeout;
-use tracing::{debug, instrument};
+use tracing::{debug, error, instrument, warn};
 
 use crate::controller::{Battery, Controller, Feedback, hid, Input};
 use crate::engine::animation::Animated;
 
 pub type PlayerId = u64;
 
+
 pub struct Players {
-    players: HashMap<PathBuf, Player>,
+    players: HashMap<PlayerId, Player>,
 
     events: hid::Events,
 }
@@ -22,11 +24,17 @@ pub struct Players {
 pub struct Player {
     controller: Controller,
 
+    acceleration: HistoryBuffer<f32, 4>,
+
     pub rumble: Animated<u8>,
     pub color: Animated<RGBColor>,
+
+    failures: usize,
 }
 
 impl Player {
+    const TIMEOUT: Duration = Duration::from_millis(10);
+
     pub fn id(&self) -> PlayerId {
         return self.controller.id();
     }
@@ -40,7 +48,7 @@ impl Player {
     }
 
     #[instrument(level = "trace", skip(self), fields(id = self.id()))]
-    async fn update(&mut self, duration: Duration) -> Result<()> {
+    async fn update(&mut self, duration: Duration) {
         self.rumble.update(duration);
         self.color.update(duration);
 
@@ -49,12 +57,35 @@ impl Player {
             rumble: self.rumble.value(),
         });
 
-        return self.controller.update().await;
+        let update = self.controller.update();
+        let update = timeout(Self::TIMEOUT, update);
+
+        if let Err(err) = update.await
+            .map_err(Into::into)
+            .flatten() {
+            warn!("Updating controller {} failed: {}", self.controller.id(), err);
+            self.failures += 1;
+        }
+
+        // Update acceleration data history
+        self.acceleration.write((1.0 - self.controller.input().accelerometer.magnitude()).abs());
+    }
+
+    pub fn controller(&self) -> &Controller {
+        return &self.controller;
+    }
+
+    pub fn acceleration(&self, avg: bool) -> f32 {
+        return if avg {
+            self.acceleration.iter().sum::<f32>() / self.acceleration.len() as f32
+        } else {
+            self.acceleration.recent().copied().unwrap_or(0.0)
+        };
     }
 }
 
 impl Players {
-    const TIMEOUT: Duration = Duration::from_millis(10);
+    const MAX_FAILS: usize = 10;
 
     #[instrument(level = "debug")]
     pub async fn init() -> Result<Self> {
@@ -84,18 +115,22 @@ impl Players {
 
                 hid::Event::Removed(path) => {
                     debug!("Removed controller: {:?}", &path);
-
-                    self.players.remove(&path);
+                    self.players.retain(|_, player| player.controller.path() != path);
                 }
             };
         }
 
-        // TODO: Check and handle (log, retry, circuit-break) timeouts
+        // Update all controllers
+        futures::future::join_all(
+            self.players.values_mut()
+                .map(|player| player.update(duration))
+        ).await;
 
-        let updates = self.iter_mut()
-            .map(|player| timeout(Self::TIMEOUT, player.update(duration)));
-
-        futures::future::join_all(updates).await;
+        // Drop controllers with high error count
+        for (id, _) in self.players
+            .drain_filter(|_, player| player.failures >= Self::MAX_FAILS) {
+            error!("Dropping player {} because of to many errors", id);
+        }
 
         return Ok(());
     }
@@ -113,18 +148,16 @@ impl Players {
     }
 
     pub fn get(&self, id: PlayerId) -> Option<&Player> {
-        return self.players.values()
-            .find(|player| player.id() == id);
+        return self.players.get(&id);
     }
 
     pub fn get_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
-        return self.players.values_mut()
-            .find(|player| player.id() == id);
+        return self.players.get_mut(&id);
     }
 
-    pub fn with_data<'a, D>(&'a mut self, data: &'a mut PlayerData<D>) -> WithData<'a, D> {
+    pub fn with_data<'a, D>(&'a mut self, data: &'a mut PlayerData<D>) -> WithData<'a, D, impl Iterator<Item=&'a mut Player>> {
         return WithData {
-            iter: self.players.values_mut(),
+            iter: self.iter_mut(),
             data,
         };
     }
@@ -133,10 +166,16 @@ impl Players {
         debug!("Added controller: {:?}", device.path);
 
         let controller = Controller::new(&device.path).await?;
-        self.players.insert(device.path, Player {
+
+        // Must ensure IDs are unique
+        assert!(self.players.contains_key(&controller.id()));
+
+        self.players.insert(controller.id(), Player {
             controller,
+            acceleration: HistoryBuffer::new_with(0.0),
             rumble: Animated::idle(0),
             color: Animated::idle(RGBColor { r: 0.0, g: 0.0, b: 0.0 }),
+            failures: 0,
         });
 
         return Ok(());
@@ -191,13 +230,19 @@ impl<D> PlayerData<D> {
     }
 }
 
-pub struct WithData<'a, D> {
-    iter: hash_map::ValuesMut<'a, PathBuf, Player>,
+pub struct WithData<'a, D, I>
+    where
+        I: Iterator<Item=&'a mut Player>,
+{
+    iter: I,
     data: &'a mut PlayerData<D>,
 }
 
-impl<'a, D> WithData<'a, D> {
-    pub fn with_default<F>(self, default: F) -> WithDefaultData<'a, D, F> {
+impl<'a, D, I> WithData<'a, D, I>
+    where
+        I: Iterator<Item=&'a mut Player>,
+{
+    pub fn with_default<F>(self, default: F) -> WithDefaultData<'a, D, F, I> {
         return WithDefaultData {
             iter: self.iter,
             data: self.data,
@@ -210,7 +255,10 @@ impl<'a, D> WithData<'a, D> {
     }
 }
 
-impl<'a, D> Iterator for WithData<'a, D> {
+impl<'a, D, I> Iterator for WithData<'a, D, I>
+    where
+        I: Iterator<Item=&'a mut Player>,
+{
     type Item = (&'a mut Player, Option<&'a mut D>);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -231,15 +279,19 @@ impl<'a, D> Iterator for WithData<'a, D> {
     }
 }
 
-pub struct WithDefaultData<'a, D, F> {
-    iter: hash_map::ValuesMut<'a, PathBuf, Player>,
+pub struct WithDefaultData<'a, D, F, I>
+    where
+        I: Iterator<Item=&'a mut Player>,
+{
+    iter: I,
     data: &'a mut PlayerData<D>,
     default: F,
 }
 
-impl<'a, D, F> Iterator for WithDefaultData<'a, D, F>
+impl<'a, D, F, I> Iterator for WithDefaultData<'a, D, F, I>
     where
         F: Fn() -> D,
+        I: Iterator<Item=&'a mut Player>,
 {
     type Item = (&'a mut Player, &'a mut D);
 

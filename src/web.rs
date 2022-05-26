@@ -1,19 +1,21 @@
+use std::collections::HashSet;
 use std::future::Future;
 use std::net::SocketAddr;
 
 use anyhow::Result;
-use futures::SinkExt;
 use futures::channel::mpsc;
+use futures::SinkExt;
 use rust_embed::RustEmbed;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use tokio::sync::watch;
 use tracing::info;
 use warp::{body, Filter, get, http, log, path, post, reject, Rejection, Reply};
 use warp::ws;
 
+use crate::controller::{Address, Battery, Controller, Model};
 use crate::engine::players::PlayerId;
 use crate::games::GameMode;
-use crate::state::{CancelGameError, NoSuchPlayerError, StartGameError};
+use crate::state::{CancelGameError, NoSuchPlayerError, StartGameError, State};
 use crate::state::request::{Actions, Stub};
 
 #[derive(RustEmbed)]
@@ -49,46 +51,93 @@ impl Static {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub enum GameState {
+#[derive(Serialize, Clone, PartialEq)]
+pub enum GameStateDTO {
     Waiting {
-        ready: Vec<PlayerId>,
+        ready: HashSet<PlayerId>,
     },
 
     Running {},
 }
 
-#[derive(Serialize, Deserialize, Clone, Eq, PartialEq)]
-pub struct Info {
-    pub mode: GameMode,
-
-    pub state: GameState,
-}
-
-impl Default for Info {
-    fn default() -> Self {
-        return Self {
-            mode: GameMode::Debug,
-            state: GameState::Waiting {
-                ready: Vec::default(),
+impl From<&State> for GameStateDTO {
+    fn from(state: &State) -> Self {
+        return match state {
+            State::Lobby(lobby) => Self::Waiting {
+                ready: lobby.ready().clone(),
             },
+            State::Countdown(_) => Self::Running {},
+            State::Playing(_) => Self::Running {},
+            State::Celebration(_) => Self::Running {},
         };
     }
 }
 
-pub struct InfoPublisher(watch::Sender<Info>);
+#[derive(Serialize, Clone, PartialEq)]
+pub struct ControllerInfoDTO {
+    pub address: Address,
+    pub signal: f64,
+    pub battery: Battery,
+    pub model: Model,
+}
+
+impl From<&Controller> for ControllerInfoDTO {
+    fn from(controller: &Controller) -> Self {
+        return Self {
+            address: controller.serial(),
+            signal: 0.0,
+            battery: controller.battery(),
+            model: controller.model(),
+        };
+    }
+}
+
+#[derive(Serialize, Clone, PartialEq)]
+pub struct StateDTO {
+    pub mode: GameModeDTO,
+    pub state: GameStateDTO,
+    pub devices: Vec<ControllerInfoDTO>,
+}
+
+impl Serialize for Address {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        serializer.serialize_str(&self.as_string())
+    }
+}
+
+impl Default for StateDTO {
+    fn default() -> Self {
+        return Self {
+            mode: Default::default(),
+            state: GameStateDTO::Waiting {
+                ready: Default::default(),
+            },
+            devices: Default::default(),
+        };
+    }
+}
+
+pub struct InfoPublisher(watch::Sender<StateDTO>);
 
 impl InfoPublisher {
-    pub fn publish(&mut self, info: Info) {
+    pub fn publish(&mut self, info: StateDTO) {
         if *self.0.borrow() != info {
             self.0.send_replace(info);
         }
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct GameModePayload {
+#[derive(Serialize, Deserialize, Default, PartialEq, Eq, Copy, Clone)]
+pub struct GameModeDTO {
     pub mode: GameMode,
+}
+
+impl From<GameMode> for GameModeDTO {
+    fn from(mode: GameMode) -> Self {
+        return Self {
+            mode,
+        };
+    }
 }
 
 impl reject::Reject for StartGameError {}
@@ -102,7 +151,7 @@ fn mode_set(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> + Cl
         .map(move || stub.clone())
         .and(path!("mode"))
         .and(body::json())
-        .then(|mut stub: Stub, body: GameModePayload| async move {
+        .then(|mut stub: Stub, body: GameModeDTO| async move {
             stub.game_mode(body.mode).await;
             return http::StatusCode::OK;
         });
@@ -156,16 +205,16 @@ fn player_kick(stub: Stub) -> impl Filter<Extract=impl Reply, Error=Rejection> +
         });
 }
 
-fn status(rx: watch::Receiver<Info>) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
+fn state(rx: watch::Receiver<StateDTO>) -> impl Filter<Extract=impl Reply, Error=Rejection> + Clone {
     return ws()
-        .and(path!("status"))
+        .and(path!("state"))
         .map(move |ws: ws::Ws| {
             let mut rx = rx.clone();
             ws.on_upgrade(|mut ws| async move {
                 loop {
                     let info = rx.borrow_and_update().clone();
                     let info = serde_json::to_string(&info)
-                        .expect("Failed to serialize status message");
+                        .expect("Failed to serialize state message");
 
                     if let Err(_) = ws.send(ws::Message::text(info)).await {
                         break;
@@ -184,7 +233,7 @@ pub fn serve() -> Result<(impl Future<Output=()>, mpsc::Receiver<Actions>, InfoP
 
     let (stub, requests) = Stub::create();
 
-    let (info_publisher, info_watch) = watch::channel(Info::default());
+    let (info_publisher, info_watch) = watch::channel(StateDTO::default());
     let info_publisher = InfoPublisher(info_publisher);
 
     let api = mode_set(stub.clone())
@@ -192,7 +241,7 @@ pub fn serve() -> Result<(impl Future<Output=()>, mpsc::Receiver<Actions>, InfoP
         .or(game_cancel(stub.clone()))
         .or(player_buzz(stub.clone()))
         .or(player_kick(stub.clone()))
-        .or(status(info_watch));
+        .or(state(info_watch));
 
     let api = path("api")
         .and(api)

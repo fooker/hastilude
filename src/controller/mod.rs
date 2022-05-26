@@ -1,16 +1,18 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::ops::Deref;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cgmath::{ElementWise, Zero};
+use serde::Serialize;
 use tokio::fs::{File, OpenOptions};
 use tracing::instrument;
 
-use crate::controller::proto::{Address, Get, Set};
-use crate::controller::proto::zcm1::{GetAddress, GetCalibration, GetCalibrationInner, GetInput, SetLED};
+use proto::{Get, Set};
+pub use proto::Address;
+use proto::zcm1::{GetAddress, GetCalibration, GetCalibrationInner, GetInput, SetLED};
 
 mod proto;
 pub mod hid;
@@ -145,7 +147,7 @@ impl Default for Input {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq)]
 pub enum Battery {
     Draining(f32),
 
@@ -153,6 +155,12 @@ pub enum Battery {
     Charged,
 
     Unknown,
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Model {
+    CECH_ZCM1,
+    CECH_ZCM2,
 }
 
 #[derive(Debug, Clone)]
@@ -197,7 +205,11 @@ impl From<GetCalibrationInner> for Calibration {
 }
 
 pub struct Controller {
-    f: File,
+    /// Path of the device
+    path: PathBuf,
+
+    /// The device file used for communication
+    file: File,
 
     /// The bluetooth address of the controller
     address: Address,
@@ -213,25 +225,28 @@ pub struct Controller {
 
 impl Controller {
     pub async fn new(path: impl AsRef<Path>) -> Result<Self> {
-        let mut f = OpenOptions::new()
+        let path = path.as_ref().to_path_buf();
+
+        let mut file = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(path)
+            .open(&path)
             .await?;
 
         // Get device address
-        let address = GetAddress::get(&mut f).await?
+        let address = GetAddress::get(&mut file).await?
             .controller;
 
         // Collect calibration data from device
         let calibration = GetCalibration::stitch([
-            &GetCalibration::get(&mut f).await?,
-            &GetCalibration::get(&mut f).await?,
-            &GetCalibration::get(&mut f).await?,
+            &GetCalibration::get(&mut file).await?,
+            &GetCalibration::get(&mut file).await?,
+            &GetCalibration::get(&mut file).await?,
         ])?.into();
 
         return Ok(Self {
-            f,
+            path,
+            file,
             address,
             calibration,
             input: Default::default(),
@@ -240,8 +255,16 @@ impl Controller {
         });
     }
 
-    pub fn serial(&self) -> &Address {
-        return &self.address;
+    pub fn path(&self) -> &Path {
+        return &self.path;
+    }
+
+    pub fn serial(&self) -> Address {
+        return self.address;
+    }
+
+    pub fn model(&self) -> Model {
+        return Model::CECH_ZCM1;
     }
 
     /// A unique id of that controller
@@ -251,16 +274,16 @@ impl Controller {
         return hasher.finish();
     }
 
-    #[instrument(level="trace", skip(self))]
+    #[instrument(level = "trace", skip(self))]
     pub async fn update(&mut self) -> Result<()> {
         // Send updates if required
         if let Some(feedback) = self.feedback.update() {
             let led = SetLED::from(feedback);
-            SetLED::set(&mut self.f, led).await?;
+            SetLED::set(&mut self.file, led).await?;
         }
 
         // Read input report from device
-        let input = GetInput::get(&mut self.f).await?;
+        let input = GetInput::get(&mut self.file).await?;
 
         fn avg(v1: cgmath::Vector3<f32>, v2: cgmath::Vector3<f32>) -> cgmath::Vector3<f32> {
             return (v1 + v2) / 2.0;

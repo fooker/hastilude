@@ -8,8 +8,7 @@ use tracing::debug;
 
 use crate::{keyframe, keyframes};
 use crate::engine::players::{PlayerData, PlayerId};
-use crate::engine::World;
-use crate::state::State;
+use crate::state::{State, World};
 
 pub struct Celebration {
     elapsed: Duration,

@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use cgmath::InnerSpace;
-use heapless::HistoryBuffer;
 use rand::Rng;
 use scarlet::color::{Color, RGBColor};
 use scarlet::colors::HSVColor;
@@ -10,30 +8,24 @@ use scarlet::colors::HSVColor;
 use crate::engine::animation::Animated;
 use crate::engine::players::{PlayerData, PlayerId};
 use crate::engine::sound::Playback;
-use crate::engine::World;
-use crate::games::{Game, GameData};
+use crate::games::{Game, GameData, Session};
 use crate::keyframes;
 use crate::meta::celebration::Celebration;
 use crate::meta::countdown::PlayerColor;
-use crate::state::State;
+use crate::state::{State, World};
 
 pub struct Player {
     alive: bool,
-
-    accel: HistoryBuffer<f32, 4>,
 
     hue: f64,
 }
 
 impl PlayerColor for Player {
     fn color(&self) -> RGBColor {
-        let accel = self.accel.recent().copied()
-            .unwrap_or(0.0);
-
         return HSVColor {
             h: self.hue,
             s: 1.0,
-            v: 1.0 - f32::sqrt(accel) as f64,
+            v: 1.0,
         }.convert::<RGBColor>();
     }
 }
@@ -72,6 +64,8 @@ pub struct Joust {
     music_speed: Animated<f32>,
 
     threshold: Animated<f32>,
+
+    hue_base: f64,
 }
 
 impl Joust {
@@ -82,7 +76,7 @@ impl Joust {
 }
 
 impl Game for Joust {
-    fn update(mut self: Box<Self>, world: &mut World, duration: Duration) -> State {
+    fn update(&mut self, world: &mut World, duration: Duration, session: &Session) -> Option<State> {
         self.music_speed.update(duration);
         self.threshold.update(duration);
 
@@ -124,10 +118,7 @@ impl Game for Joust {
         for (player, data) in world.players.with_data(&mut self.data)
             .existing() {
             if data.alive {
-                data.accel.write((1.0 - player.input().accelerometer.magnitude()).abs());
-                let accel = data.accel.iter().sum::<f32>() / data.accel.len() as f32;
-                let accel = accel / self.threshold.value();
-
+                let accel = player.acceleration(true) / self.threshold.value();
                 if accel >= 1.0 {
                     data.alive = false;
 
@@ -153,19 +144,28 @@ impl Game for Joust {
             .collect::<HashSet<_>>();
 
         if alive.len() == 1 {
-            return State::Celebration(Celebration::new(alive, world));
+            return Some(State::Celebration(Celebration::new(alive, world)));
         }
 
         if alive.is_empty() {
             // Got a draw - everybody is winner
-            return State::Celebration(Celebration::new(self.data.keys().collect(), world));
+            return Some(State::Celebration(Celebration::new(self.data.keys().collect(), world)));
         }
 
-        return State::Playing(self);
+        return None;
     }
 
     fn kick_player(&mut self, player: PlayerId, world: &mut World) -> bool {
-        return GameData::kick_player(self, player, world);
+        if self.data.remove(player) {
+            // Reset player color
+            if let Some(player) = world.players.get_mut(player) {
+                player.color.set(RGBColor { r: 0.0, g: 0.0, b: 0.0 })
+            }
+
+            return true;
+        }
+
+        return false;
     }
 }
 
@@ -188,7 +188,6 @@ impl GameData for Joust {
             .enumerate()
             .map(|(i, id)| (id, Player {
                 alive: true,
-                accel: HistoryBuffer::new(),
                 hue: ((hue_base + hue_step * i as f64) * 360.0) % 360.0,
             }))
             .collect());
@@ -199,6 +198,7 @@ impl GameData for Joust {
             music,
             music_speed: Animated::idle(Speed::NORMAL.music()),
             threshold: Animated::idle(Speed::NORMAL.threshold()),
+            hue_base,
         };
     }
 }

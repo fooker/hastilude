@@ -1,6 +1,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(iter_intersperse)]
 #![feature(result_flattening)]
+#![feature(hash_drain_filter)]
 
 use std::time::Instant;
 
@@ -11,8 +12,8 @@ use crate::engine::assets::Assets;
 use crate::engine::players::Players;
 use crate::engine::sound::Sound;
 use crate::engine::World;
-use crate::state::State;
-use crate::web::{Info, GameState};
+use crate::state::{Settings, State};
+use crate::web::StateDTO;
 
 pub mod controller;
 pub mod engine;
@@ -39,8 +40,6 @@ async fn main() -> Result<()> {
     let assets = Assets::init(std::env::current_dir()?.join("assets"))
         .context("Failed to initialize assets")?;
 
-    let mut last = Instant::now();
-
     // Initialize fresh state machine
     let mut state = State::lobby(&mut players);
 
@@ -48,6 +47,10 @@ async fn main() -> Result<()> {
     let (web, mut requests, mut info) = web::serve()?;
     let mut web = tokio::spawn(web);
 
+    // The initial settings
+    let mut settings = Settings::default();
+
+    let mut last = Instant::now();
     loop {
         // Calculate last frame duration
         let now = Instant::now();
@@ -67,6 +70,7 @@ async fn main() -> Result<()> {
             players: &mut players,
             sound: &mut sound,
             assets: &assets,
+            settings: &mut settings,
         };
 
         // Handle requests
@@ -76,9 +80,12 @@ async fn main() -> Result<()> {
         state = state.update(&mut world, duration);
 
         // Publish updated status info
-        info.publish(Info {
-            mode: *state::GAME_MODE.lock(),
-            state: GameState::Waiting { ready: Vec::new() },
+        info.publish(StateDTO {
+            mode: settings.game_mode.into(),
+            state: (&state).into(),
+            devices: players.iter()
+                .map(|player| player.controller().into())
+                .collect(),
         });
 
         last = now;

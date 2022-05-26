@@ -124,7 +124,7 @@ impl<R> Setter<R> for Feature
     }
 }
 
-#[derive(PackedStruct, Debug)]
+#[derive(PackedStruct, Debug, Eq, PartialEq, Hash, Copy, Clone)]
 #[packed_struct(bit_numbering = "msb0", endian = "lsb")]
 pub struct Address {
     data: [u8; 6],

@@ -5,9 +5,8 @@ use scarlet::colorpoint::ColorPoint;
 
 use crate::controller::Battery;
 use crate::engine::sound::Playback;
-use crate::engine::World;
-use crate::games::Game;
-use crate::state::State;
+use crate::games::{Game, Session};
+use crate::state::{State, World};
 use crate::engine::players::PlayerId;
 
 pub struct Debug {
@@ -47,7 +46,7 @@ impl Debug {
 }
 
 impl Game for Debug {
-    fn update(mut self: Box<Self>, world: &mut World, _duration: Duration) -> State {
+    fn update(&mut self, world: &mut World, _: Duration, _: &Session) -> Option<State> {
         let triangle = world.players.iter()
             .any(|player| player.input().buttons.triangle);
 
@@ -71,7 +70,7 @@ impl Game for Debug {
 
         if world.players.iter()
             .any(|player| player.input().buttons.start || player.input().buttons.cross) {
-            return State::lobby(world.players);
+            return Some(State::lobby(world.players));
         }
 
         if let Some(player) = world.players.iter().next() {
@@ -84,7 +83,7 @@ impl Game for Debug {
             self.music.speed(speed);
         }
 
-        return State::Playing(self);
+        return None;
     }
 
     fn kick_player(&mut self, _player: PlayerId, _world: &mut World) -> bool {
