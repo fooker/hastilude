@@ -1,7 +1,7 @@
 #![feature(type_alias_impl_trait)]
 #![feature(iter_intersperse)]
 #![feature(result_flattening)]
-#![feature(hash_drain_filter)]
+#![feature(drain_filter)]
 
 use std::time::Instant;
 

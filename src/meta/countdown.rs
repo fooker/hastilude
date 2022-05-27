@@ -25,7 +25,7 @@ impl Countdown {
         debug!("Start countdown");
 
         // Short initial buzz for all players
-        for (player, data) in world.players.with_data(game.data()).existing() {
+        world.players.with_data(game.data()).update(|player, data| {
             player.rumble.animate(keyframes![
                 0.0 => 127,
                 0.1 => 0,
@@ -45,7 +45,9 @@ impl Countdown {
                 0.30 => { (0, 0, 0) } @ linear,
                 0.45 => { data.color() } @ end,
             ]);
-        }
+
+            return true;
+        });
 
         return Self {
             game: Box::new(game),

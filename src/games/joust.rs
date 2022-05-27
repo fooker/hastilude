@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use rand::Rng;
@@ -15,8 +16,6 @@ use crate::meta::countdown::PlayerColor;
 use crate::state::{State, World};
 
 pub struct Player {
-    alive: bool,
-
     hue: f64,
 }
 
@@ -69,10 +68,17 @@ pub struct Joust {
 }
 
 impl Joust {
-    const CHANGE_SPEED: Duration = Duration::from_millis(1000);
+    // Speed for changes in pacing
+    const PACING_CHANGE_SPEED: Duration = Duration::from_millis(1000);
 
-    const MUSIC_TIME_MIN: Duration = Duration::from_secs(15);
-    const MUSIC_TIME_MAX: Duration = Duration::from_secs(30);
+    // Minimum / maximum duration of a pacing phase
+    const PACING_PHASE_DUR: Range<Duration> = (Duration::from_secs(15) .. Duration::from_secs(30));
+
+    // Speed of hue rotation (time for a full rotation)
+    const HUE_ROTATION_SPEED: f64 = 1.0 / 120.0;
+
+    // Speed of hue adoption when hue must change
+    const HUE_ADOPTION_SPEED: f64 = 1.0 / 20.0;
 }
 
 impl Game for Joust {
@@ -93,20 +99,20 @@ impl Game for Joust {
             };
 
             self.music_speed.animate(keyframes![
-                Self::CHANGE_SPEED => { speed.music() } @ linear,
+                Self::PACING_CHANGE_SPEED => { speed.music() } @ linear,
             ]);
 
             // Apply slack in threshold
             if slack {
                 self.threshold.animate(keyframes![
-                    Self::CHANGE_SPEED * 3 => { speed.threshold() } @ linear,
+                    Self::PACING_CHANGE_SPEED * 3 => { speed.threshold() } @ linear,
                 ]);
             } else {
                 self.threshold.set(speed.threshold());
             }
 
             // Roll a dice for duration of the next phase
-            let duration = rand::thread_rng().gen_range(Self::MUSIC_TIME_MIN..Self::MUSIC_TIME_MAX);
+            let duration = rand::thread_rng().gen_range(Self::PACING_PHASE_DUR);
 
             self.speed = (speed, world.now + duration);
         }
@@ -114,42 +120,45 @@ impl Game for Joust {
         // Update music speed
         self.music.speed(self.music_speed.value());
 
+        // Slowly rotate and re-balance player colors
+        for (i, (_, data)) in self.data.iter_mut().enumerate() {
+            let target_hue = ((self.hue_base + session.age(world.now).as_secs_f64() * Self::HUE_ROTATION_SPEED + (1.0 / world.players.count() as f64) * i as f64) * 360.0) % 360.0;
+            let delta_hue = target_hue - data.hue;
+            data.hue += delta_hue.signum() * (Self::HUE_ADOPTION_SPEED * duration.as_secs_f64()).min(delta_hue.abs());
+        }
+
         // Update players
-        for (player, data) in world.players.with_data(&mut self.data)
-            .existing() {
-            if data.alive {
-                let accel = player.acceleration(true) / self.threshold.value();
-                if accel >= 1.0 {
-                    data.alive = false;
+        world.players.with_data(&mut self.data).update(|player, data| {
+            let accel = player.acceleration(true) / self.threshold.value();
 
-                    player.color.set(RGBColor { r: 0.0, g: 0.0, b: 0.0 });
-                    player.rumble.animate(keyframes![
-                        0.0 => 255,
-                        1.0 => 0 @ linear,
-                    ]);
-                } else {
-                    // TODO: Slowly move color around and re-balance if player is out
-                    player.color.set(HSVColor {
-                        h: data.hue,
-                        s: 1.0,
-                        v: 1.0 - f32::sqrt(accel) as f64,
-                    }.convert::<RGBColor>());
-                }
+            // Check if player has moved to much
+            if accel >= 1.0 {
+                player.color.set(RGBColor { r: 0.0, g: 0.0, b: 0.0 });
+                player.rumble.animate(keyframes![
+                    0.0 => 255,
+                    1.0 => 0 @ linear,
+                ]);
+
+                return false;
             }
-        }
 
-        // Check if at least one player is alive
-        let alive = self.data.iter()
-            .filter_map(|(id, data)| if data.alive { Some(id) } else { None })
-            .collect::<HashSet<_>>();
+            // Update color reflecting players acceleration
+            player.color.set(HSVColor {
+                h: data.hue,
+                s: 1.0,
+                v: 1.0 - f32::sqrt(accel) as f64,
+            }.convert::<RGBColor>());
 
-        if alive.len() == 1 {
-            return Some(State::Celebration(Celebration::new(alive, world)));
-        }
+            return true;
+        });
 
-        if alive.is_empty() {
-            // Got a draw - everybody is winner
+        if self.data.len() == 1 {
             return Some(State::Celebration(Celebration::new(self.data.keys().collect(), world)));
+        }
+
+        if self.data.len() == 0 {
+            // Got a draw - everybody is winner
+            return Some(State::Celebration(Celebration::new(world.players.keys().collect(), world)));
         }
 
         return None;
@@ -187,14 +196,13 @@ impl GameData for Joust {
         let players = PlayerData::init_with(players.into_iter()
             .enumerate()
             .map(|(i, id)| (id, Player {
-                alive: true,
                 hue: ((hue_base + hue_step * i as f64) * 360.0) % 360.0,
             }))
             .collect());
 
         return Self {
             data: players,
-            speed: (Speed::NORMAL, Instant::now() + Self::MUSIC_TIME_MAX),
+            speed: (Speed::NORMAL, Instant::now() + Self::PACING_PHASE_DUR.end),
             music,
             music_speed: Animated::idle(Speed::NORMAL.music()),
             threshold: Animated::idle(Speed::NORMAL.threshold()),

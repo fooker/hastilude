@@ -14,13 +14,6 @@ use crate::engine::animation::Animated;
 
 pub type PlayerId = u64;
 
-
-pub struct Players {
-    players: HashMap<PlayerId, Player>,
-
-    events: hid::Events,
-}
-
 pub struct Player {
     controller: Controller,
 
@@ -84,6 +77,12 @@ impl Player {
     }
 }
 
+pub struct Players {
+    players: Vec<Player>,
+
+    events: hid::Events,
+}
+
 impl Players {
     const MAX_FAILS: usize = 10;
 
@@ -92,7 +91,7 @@ impl Players {
         let (devices, events) = hid::monitor()?;
 
         let mut players = Self {
-            players: HashMap::new(),
+            players: Vec::new(),
             events,
         };
 
@@ -115,21 +114,21 @@ impl Players {
 
                 hid::Event::Removed(path) => {
                     debug!("Removed controller: {:?}", &path);
-                    self.players.retain(|_, player| player.controller.path() != path);
+                    self.players.retain(|player| player.controller.path() != path);
                 }
             };
         }
 
         // Update all controllers
         futures::future::join_all(
-            self.players.values_mut()
+            self.players.iter_mut()
                 .map(|player| player.update(duration))
         ).await;
 
         // Drop controllers with high error count
-        for (id, _) in self.players
-            .drain_filter(|_, player| player.failures >= Self::MAX_FAILS) {
-            error!("Dropping player {} because of to many errors", id);
+        for player in self.players
+            .drain_filter(|player| player.failures >= Self::MAX_FAILS) {
+            error!("Dropping player {} because of to many errors", player.id());
         }
 
         return Ok(());
@@ -140,24 +139,28 @@ impl Players {
     }
 
     pub fn iter(&self) -> impl Iterator<Item=&Player> + ExactSizeIterator {
-        return self.players.values();
+        return self.players.iter();
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item=&mut Player> + ExactSizeIterator {
-        return self.players.values_mut();
+        return self.players.iter_mut();
     }
 
     pub fn get(&self, id: PlayerId) -> Option<&Player> {
-        return self.players.get(&id);
+        return self.players.iter().find(|player| player.id() == id);
     }
 
     pub fn get_mut(&mut self, id: PlayerId) -> Option<&mut Player> {
-        return self.players.get_mut(&id);
+        return self.players.iter_mut().find(|player| player.id() == id);
     }
 
-    pub fn with_data<'a, D>(&'a mut self, data: &'a mut PlayerData<D>) -> WithData<'a, D, impl Iterator<Item=&'a mut Player>> {
+    pub fn keys(&self) -> impl Iterator<Item=PlayerId> + '_ {
+        return self.players.iter().map(Player::id);
+    }
+
+    pub fn with_data<'a, D>(&'a mut self, data: &'a mut PlayerData<D>) -> WithData<'a, D> {
         return WithData {
-            iter: self.iter_mut(),
+            players: self,
             data,
         };
     }
@@ -168,9 +171,12 @@ impl Players {
         let controller = Controller::new(&device.path).await?;
 
         // Must ensure IDs are unique
-        assert!(self.players.contains_key(&controller.id()));
+        assert!(self.players.iter()
+            .map(Player::id)
+            .find(|id| *id == controller.id())
+            .is_none());
 
-        self.players.insert(controller.id(), Player {
+        self.players.push(Player {
             controller,
             acceleration: HistoryBuffer::new_with(0.0),
             rumble: Animated::idle(0),
@@ -207,7 +213,11 @@ impl<D> PlayerData<D> {
         self.data.clear();
     }
 
-    pub fn get(&mut self, player: PlayerId) -> Option<&mut D> {
+    pub fn get(&mut self, player: PlayerId) -> Option<&D> {
+        return self.data.get(&player);
+    }
+
+    pub fn get_mut(&mut self, player: PlayerId) -> Option<&mut D> {
         return self.data.get_mut(&player);
     }
 
@@ -228,90 +238,30 @@ impl<D> PlayerData<D> {
     pub fn remove(&mut self, player: PlayerId) -> bool {
         return self.data.remove(&player).is_some();
     }
+
+    pub fn len(&self) -> usize {
+        return self.data.len();
+    }
 }
 
-pub struct WithData<'a, D, I>
-    where
-        I: Iterator<Item=&'a mut Player>,
-{
-    iter: I,
+pub struct WithData<'a, D> {
+    players: &'a mut Players,
     data: &'a mut PlayerData<D>,
 }
 
-impl<'a, D, I> WithData<'a, D, I>
-    where
-        I: Iterator<Item=&'a mut Player>,
-{
-    pub fn with_default<F>(self, default: F) -> WithDefaultData<'a, D, F, I> {
-        return WithDefaultData {
-            iter: self.iter,
-            data: self.data,
-            default,
-        };
-    }
+impl<'a, D> WithData<'a, D> {
+    pub fn update(self, mut f: impl FnMut(&'a mut Player, &'a mut D) -> bool) {
+        self.data.data.retain(|id, data| {
+            if let Some(player) = self.players.get_mut(*id) {
+                // SAFETY: This is save because the underlying `self.iter` is guaranteed to yield unique
+                // serials and therefore this will never hand out two references to the same element
+                // from `self.data`.
+                let data: &'a mut D = unsafe { std::mem::transmute(data) };
+                let player: &'a mut Player = unsafe { std::mem::transmute(player) };
+                return f(player, data);
+            }
 
-    pub fn existing(self) -> impl Iterator<Item=(&'a mut Player, &'a mut D)> {
-        return self.filter_map(|(player, data)| data.map(|data| (player, data)));
-    }
-}
-
-impl<'a, D, I> Iterator for WithData<'a, D, I>
-    where
-        I: Iterator<Item=&'a mut Player>,
-{
-    type Item = (&'a mut Player, Option<&'a mut D>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(player) = self.iter.next() {
-            let data = self.data.get(player.id());
-            // SAFETY: This is save because the underlying `self.iter` is guaranteed to yield unique
-            // serials and therefore this will never hand out two references to the same element
-            // from `self.data`.
-            let data: Option<&mut D> = unsafe { std::mem::transmute(data) };
-            return Some((player, data));
-        };
-
-        return None;
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        return self.iter.size_hint();
-    }
-}
-
-pub struct WithDefaultData<'a, D, F, I>
-    where
-        I: Iterator<Item=&'a mut Player>,
-{
-    iter: I,
-    data: &'a mut PlayerData<D>,
-    default: F,
-}
-
-impl<'a, D, F, I> Iterator for WithDefaultData<'a, D, F, I>
-    where
-        F: Fn() -> D,
-        I: Iterator<Item=&'a mut Player>,
-{
-    type Item = (&'a mut Player, &'a mut D);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(player) = self.iter.next() {
-            let data = self.data.data.entry(player.id())
-                .or_insert_with(|| (self.default)());
-
-            // SAFETY: This is save because the underlying `self.iter` is guaranteed to yield unique
-            // serials and therefore this will never hand out two references to the same element
-            // from `self.data`.
-            let data: &mut D = unsafe { std::mem::transmute(data) };
-
-            return Some((player, data));
-        };
-
-        return None;
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        return self.iter.size_hint();
+            return false;
+        })
     }
 }

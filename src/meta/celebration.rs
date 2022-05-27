@@ -20,23 +20,21 @@ impl Celebration {
     pub fn new(winners: HashSet<PlayerId>, world: &mut World) -> Self {
         debug!("Celebrating winners: {:?}", winners);
 
-        // TODO: Get rid of this
         let mut winners = PlayerData::init(winners, || ());
-
-        for (player, _) in world.players.with_data(&mut winners).existing() {
+        world.players.with_data(&mut winners).update(|player, _| {
             player.rumble.animate(keyframes![
-            0.0 => 0   @ quadratic_in_out,
-            0.8 => 200 @ quadratic_in_out,
-            0.2 => 0   @ quadratic_in_out,
+                0.0 => 0   @ quadratic_in_out,
+                0.8 => 200 @ quadratic_in_out,
+                0.2 => 0   @ quadratic_in_out,
 
-            0.5 => 0   @ quadratic_in_out,
-            0.8 => 200 @ quadratic_in_out,
-            0.2 => 0   @ quadratic_in_out,
+                0.5 => 0   @ quadratic_in_out,
+                0.8 => 200 @ quadratic_in_out,
+                0.2 => 0   @ quadratic_in_out,
 
-            0.5 => 0   @ quadratic_in_out,
-            0.8 => 200 @ quadratic_in_out,
-            0.2 => 0   @ quadratic_in_out,
-        ]);
+                0.5 => 0   @ quadratic_in_out,
+                0.8 => 200 @ quadratic_in_out,
+                0.2 => 0   @ quadratic_in_out,
+            ]);
 
             // Generate fireworks animation
             let fireworks = std::iter::from_fn({
@@ -61,7 +59,9 @@ impl Celebration {
             }).intersperse(keyframe!(0.2 => { (0,0,0) } @ quadratic_out));
 
             player.color.animate(fireworks);
-        }
+
+            return true;
+        });
 
         return Self {
             elapsed: Duration::ZERO,
