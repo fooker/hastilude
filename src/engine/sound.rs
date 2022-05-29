@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -14,7 +14,7 @@ use crate::engine::assets::{Asset, AssetLoader};
 struct DynamicSource<I> {
     input: I,
 
-    speed: Arc<Mutex<f32>>,
+    speed: Arc<AtomicI8>,
     stopped: Arc<AtomicBool>,
 }
 
@@ -28,16 +28,16 @@ impl<I> DynamicSource<I>
     pub fn new(input: I) -> Self {
         return Self {
             input,
-            speed: Arc::new(Mutex::new(1.0)),
+            speed: Arc::new(AtomicI8::new(0)),
             stopped: Arc::new(AtomicBool::new(false)),
         };
     }
 
-    pub fn speed_handle(&self) -> Arc<Mutex<f32>> {
+    fn speed_handle(&self) -> Arc<AtomicI8> {
         return self.speed.clone();
     }
 
-    pub fn stopped_handle(&self) -> Arc<AtomicBool> {
+    fn stopped_handle(&self) -> Arc<AtomicBool> {
         return self.stopped.clone();
     }
 }
@@ -86,9 +86,9 @@ impl<I> Source for DynamicSource<I>
     }
 
     fn sample_rate(&self) -> u32 {
-        let speed = *self.speed.lock()
-            .expect("Failed to lock");
-        return (self.input.sample_rate() as f32 * speed) as u32;
+        let speed = self.speed.load(Ordering::Relaxed) as i32; // [-128, 127]: 0 => 0
+        let speed = (speed + 256) as u32;                            // [128, 383]: 0 => 256
+        return (self.input.sample_rate() * speed / 256) as u32;
     }
 
     fn total_duration(&self) -> Option<Duration> {
@@ -103,14 +103,14 @@ pub struct Sound {
 }
 
 pub struct Playback {
-    speed: Arc<Mutex<f32>>,
+    speed: Arc<AtomicI8>,
     stopped: Arc<AtomicBool>,
 }
 
 impl Playback {
     pub fn speed(&mut self, speed: f32) {
-        *self.speed.lock()
-            .expect("Failed to lock") = speed;
+        let speed = speed.clamp(0.5, 1.5) * 256.0 - 256.0;
+        self.speed.store(speed as i8, Ordering::Relaxed);
     }
 }
 

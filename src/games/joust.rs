@@ -22,7 +22,7 @@ pub struct Player {
 impl PlayerColor for Player {
     fn color(&self) -> RGBColor {
         return HSVColor {
-            h: self.hue,
+            h: self.hue * 360.0 % 360.0,
             s: 1.0,
             v: 1.0,
         }.convert::<RGBColor>();
@@ -69,16 +69,22 @@ pub struct Joust {
 
 impl Joust {
     // Speed for changes in pacing
-    const PACING_CHANGE_SPEED: Duration = Duration::from_millis(1000);
+    const PACING_CHANGE_SPEED: Duration = Duration::from_millis(1200);
 
-    // Minimum / maximum duration of a pacing phase
-    const PACING_PHASE_DUR: Range<Duration> = (Duration::from_secs(15) .. Duration::from_secs(30));
+    // Slack for slowing down movement detection
+    const PACING_CHANGE_SLACK: Duration = Duration::from_millis(3000);
+
+    // Minimum / maximum duration of a regular pacing phase
+    const PACING_REGULAR_DUR: Range<Duration> = (Duration::from_secs(10) .. Duration::from_secs(30));
+
+    // Minimum / maximum duration of a changed pacing phase
+    const PACING_CHANGED_DUR: Range<Duration> = (Duration::from_secs(5) .. Duration::from_secs(15));
 
     // Speed of hue rotation (time for a full rotation)
     const HUE_ROTATION_SPEED: f64 = 1.0 / 120.0;
 
     // Speed of hue adoption when hue must change
-    const HUE_ADOPTION_SPEED: f64 = 1.0 / 20.0;
+    const HUE_ADOPTION_SPEED: f64 = 1.0 / 10.0;
 }
 
 impl Game for Joust {
@@ -105,14 +111,17 @@ impl Game for Joust {
             // Apply slack in threshold
             if slack {
                 self.threshold.animate(keyframes![
-                    Self::PACING_CHANGE_SPEED * 3 => { speed.threshold() } @ linear,
+                    Self::PACING_CHANGE_SLACK => { speed.threshold() } @ linear,
                 ]);
             } else {
                 self.threshold.set(speed.threshold());
             }
 
             // Roll a dice for duration of the next phase
-            let duration = rand::thread_rng().gen_range(Self::PACING_PHASE_DUR);
+            let duration = rand::thread_rng().gen_range(match speed {
+                Speed::NORMAL => Self::PACING_REGULAR_DUR,
+                _ => Self::PACING_CHANGED_DUR,
+            });
 
             self.speed = (speed, world.now + duration);
         }
@@ -122,7 +131,9 @@ impl Game for Joust {
 
         // Slowly rotate and re-balance player colors
         for (i, (_, data)) in self.data.iter_mut().enumerate() {
-            let target_hue = ((self.hue_base + session.age(world.now).as_secs_f64() * Self::HUE_ROTATION_SPEED + (1.0 / world.players.count() as f64) * i as f64) * 360.0) % 360.0;
+            let target_hue = self.hue_base
+                + session.age(world.now).as_secs_f64() * Self::HUE_ROTATION_SPEED
+                + (1.0 / world.players.count() as f64) * i as f64;
             let delta_hue = target_hue - data.hue;
             data.hue += delta_hue.signum() * (Self::HUE_ADOPTION_SPEED * duration.as_secs_f64()).min(delta_hue.abs());
         }
@@ -144,7 +155,7 @@ impl Game for Joust {
 
             // Update color reflecting players acceleration
             player.color.set(HSVColor {
-                h: data.hue,
+                h: data.hue * 360.0 % 360.0,
                 s: 1.0,
                 v: 1.0 - f32::sqrt(accel) as f64,
             }.convert::<RGBColor>());
@@ -196,13 +207,13 @@ impl GameData for Joust {
         let players = PlayerData::init_with(players.into_iter()
             .enumerate()
             .map(|(i, id)| (id, Player {
-                hue: ((hue_base + hue_step * i as f64) * 360.0) % 360.0,
+                hue: hue_base + hue_step * i as f64,
             }))
             .collect());
 
         return Self {
             data: players,
-            speed: (Speed::NORMAL, Instant::now() + Self::PACING_PHASE_DUR.end),
+            speed: (Speed::NORMAL, Instant::now() + Self::PACING_REGULAR_DUR.end),
             music,
             music_speed: Animated::idle(Speed::NORMAL.music()),
             threshold: Animated::idle(Speed::NORMAL.threshold()),

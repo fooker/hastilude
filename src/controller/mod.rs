@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
+use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -43,7 +44,7 @@ impl<T> Limiter<T>
     where
         T: PartialEq,
 {
-    const MIN_UPDATE: Duration = Duration::from_millis(10);
+    const MIN_UPDATE: Duration = Duration::from_millis(50);
     const MAX_UPDATE: Duration = Duration::from_millis(1000);
 
     pub fn new(initial: T) -> Self {
@@ -274,7 +275,7 @@ impl Controller {
         return hasher.finish();
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", name = "Controller::update", skip(self))]
     pub async fn update(&mut self) -> Result<()> {
         // Send updates if required
         if let Some(feedback) = self.feedback.update() {
@@ -282,48 +283,52 @@ impl Controller {
             SetLED::set(&mut self.file, led).await?;
         }
 
-        // Read input report from device
-        let input = GetInput::get(&mut self.file).await?;
+        // Read input report from device if available
+        // TODO: Revisit this: Would it be better to read at least one report?
+        // TODO: This effectively disables the timeout
+        if let Poll::Ready(input) = futures::poll!(GetInput::get(&mut self.file)) {
+            let input = input?;
 
-        fn avg(v1: cgmath::Vector3<f32>, v2: cgmath::Vector3<f32>) -> cgmath::Vector3<f32> {
-            return (v1 + v2) / 2.0;
+            fn avg(v1: cgmath::Vector3<f32>, v2: cgmath::Vector3<f32>) -> cgmath::Vector3<f32> {
+                return (v1 + v2) / 2.0;
+            }
+
+            self.input.accelerometer = avg(input.accel_1.into(), input.accel_2.into())
+                .mul_element_wise(self.calibration.accelerometer_m)
+                .add_element_wise(self.calibration.accelerometer_b);
+
+            self.input.gyroscope = avg(input.gyro_1.into(), input.gyro_2.into())
+                .mul_element_wise(self.calibration.gyroscope);
+
+            fn bit(buttons: impl Into<u32>, bit: usize) -> bool {
+                return buttons.into() & (1 << bit) != 0;
+            }
+
+            let trigger = ((input.trigger_1 as f32) / (0xFF as f32) + (input.trigger_1 as f32) / (0xFF as f32)) / 2.0;
+
+            self.input.buttons = Buttons {
+                square: bit(input.buttons, 15),
+                triangle: bit(input.buttons, 12),
+                cross: bit(input.buttons, 14),
+                circle: bit(input.buttons, 13),
+                start: bit(input.buttons, 3),
+                select: bit(input.buttons, 0),
+                logo: bit(input.buttons, 16),
+                swoosh: bit(input.buttons, 19),
+                trigger: (bit(input.buttons, 20), trigger),
+            };
+
+            self.battery = match input.battery {
+                0x00 => Battery::Draining(0.0),
+                0x01 => Battery::Draining(0.2),
+                0x02 => Battery::Draining(0.4),
+                0x03 => Battery::Draining(0.6),
+                0x04 => Battery::Draining(0.8),
+                0xEE => Battery::Charging,
+                0xEF => Battery::Charged,
+                _ => Battery::Unknown,
+            };
         }
-
-        self.input.accelerometer = avg(input.accel_1.into(), input.accel_2.into())
-            .mul_element_wise(self.calibration.accelerometer_m)
-            .add_element_wise(self.calibration.accelerometer_b);
-
-        self.input.gyroscope = avg(input.gyro_1.into(), input.gyro_2.into())
-            .mul_element_wise(self.calibration.gyroscope);
-
-        fn bit(buttons: impl Into<u32>, bit: usize) -> bool {
-            return buttons.into() & (1 << bit) != 0;
-        }
-
-        let trigger = ((input.trigger_1 as f32) / (0xFF as f32) + (input.trigger_1 as f32) / (0xFF as f32)) / 2.0;
-
-        self.input.buttons = Buttons {
-            square: bit(input.buttons, 15),
-            triangle: bit(input.buttons, 12),
-            cross: bit(input.buttons, 14),
-            circle: bit(input.buttons, 13),
-            start: bit(input.buttons, 3),
-            select: bit(input.buttons, 0),
-            logo: bit(input.buttons, 16),
-            swoosh: bit(input.buttons, 19),
-            trigger: (bit(input.buttons, 20), trigger),
-        };
-
-        self.battery = match input.battery {
-            0x00 => Battery::Draining(0.0),
-            0x01 => Battery::Draining(0.2),
-            0x02 => Battery::Draining(0.4),
-            0x03 => Battery::Draining(0.6),
-            0x04 => Battery::Draining(0.8),
-            0xEE => Battery::Charging,
-            0xEF => Battery::Charged,
-            _ => Battery::Unknown,
-        };
 
         return Ok(());
     }

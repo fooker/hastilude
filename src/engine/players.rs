@@ -22,11 +22,11 @@ pub struct Player {
     pub rumble: Animated<u8>,
     pub color: Animated<RGBColor>,
 
-    failures: usize,
+    failed: usize,
 }
 
 impl Player {
-    const TIMEOUT: Duration = Duration::from_millis(10);
+    const TIMEOUT: Duration = Duration::from_millis(1000);
 
     pub fn id(&self) -> PlayerId {
         return self.controller.id();
@@ -40,7 +40,7 @@ impl Player {
         return self.controller.battery();
     }
 
-    #[instrument(level = "trace", skip(self), fields(id = self.id()))]
+    #[instrument(level = "trace", name = "Player::update", skip(self), fields(id = self.id()))]
     async fn update(&mut self, duration: Duration) {
         self.rumble.update(duration);
         self.color.update(duration);
@@ -57,7 +57,11 @@ impl Player {
             .map_err(Into::into)
             .flatten() {
             warn!("Updating controller {} failed: {}", self.controller.id(), err);
-            self.failures += 1;
+            self.failed += 1;
+        } else {
+            // TODO: Do not reset immediately but require multiple successful before resetting
+            // TODO: Report flaky devices
+            self.failed = 0;
         }
 
         // Update acceleration data history
@@ -103,7 +107,7 @@ impl Players {
         return Ok(players);
     }
 
-    #[instrument(level = "trace", skip(self))]
+    #[instrument(level = "trace", name = "Players::update", skip(self))]
     pub async fn update(&mut self, duration: Duration) -> Result<()> {
         // We limit this to a single event on each update cycle
         if let Poll::Ready(Some(event)) = futures::poll(self.events.next()).await {
@@ -127,7 +131,7 @@ impl Players {
 
         // Drop controllers with high error count
         for player in self.players
-            .drain_filter(|player| player.failures >= Self::MAX_FAILS) {
+            .drain_filter(|player| player.failed >= Self::MAX_FAILS) {
             error!("Dropping player {} because of to many errors", player.id());
         }
 
@@ -181,7 +185,7 @@ impl Players {
             acceleration: HistoryBuffer::new_with(0.0),
             rumble: Animated::idle(0),
             color: Animated::idle(RGBColor { r: 0.0, g: 0.0, b: 0.0 }),
-            failures: 0,
+            failed: 0,
         });
 
         return Ok(());

@@ -75,9 +75,9 @@ impl Game for Debug {
 
         if let Some(player) = world.players.iter().next() {
             let speed = if player.input().buttons.square {
-                player.input().buttons.trigger.1 * 1.5
+                1.0 + player.input().buttons.trigger.1 * 0.5
             } else {
-                player.input().buttons.trigger.1 * -1.5
+                1.0 - player.input().buttons.trigger.1 * 0.5
             };
 
             self.music.speed(speed);

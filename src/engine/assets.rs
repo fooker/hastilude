@@ -23,6 +23,7 @@ pub struct Asset<L: AssetLoader> {
 }
 
 impl<L: AssetLoader> Asset<L> {
+    #[instrument(level = "debug", name = "Asset::load")]
     pub fn load(&self) -> L::Asset {
         return trace_span!("Loading asset", path=?self.path)
             .in_scope(|| L::load(&self.path))

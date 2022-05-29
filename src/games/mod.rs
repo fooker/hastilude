@@ -83,7 +83,7 @@ pub enum GameMode {
 
 impl Default for GameMode {
     fn default() -> Self {
-        return Self::Debug;
+            return Self::Joust;
     }
 }
 
