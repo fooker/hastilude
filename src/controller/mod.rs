@@ -1,4 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
+use std::future::Future;
 use std::hash::Hasher;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cgmath::{ElementWise, Zero};
+use futures::TryFuture;
 use serde::Serialize;
 use tokio::fs::{File, OpenOptions};
 use tracing::instrument;
@@ -233,6 +235,9 @@ impl Controller {
             .write(true)
             .open(&path)
             .await?;
+
+        // Delay a bit for things to settle
+        tokio::time::sleep(Duration::from_millis(100));
 
         // Get device address
         let address = GetAddress::get(&mut file).await?
